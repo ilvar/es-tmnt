@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
@@ -36,12 +37,12 @@ func New(cfg config.Config) (*Proxy, error) {
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	route, err := p.router.Route(r)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("unsupported request: %v", err), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("unsupported request: %v", err))
 		return
 	}
 	if route.Action != ActionPassthrough {
 		if err := p.router.Rewrite(r, route); err != nil {
-			http.Error(w, fmt.Sprintf("rewrite error: %v", err), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("rewrite error: %v", err))
 			return
 		}
 		r.Header.Set("X-ES-Tenant", route.Tenant)
@@ -54,7 +55,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		req.Host = p.upstream.Host
 	}
 	proxied.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
-		http.Error(rw, fmt.Sprintf("proxy error: %v", err), http.StatusBadGateway)
+		writeError(rw, http.StatusBadGateway, fmt.Sprintf("proxy error: %v", err))
 	}
 	proxied.ServeHTTP(w, r)
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error": message,
+	})
 }
