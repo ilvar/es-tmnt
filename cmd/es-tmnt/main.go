@@ -19,6 +19,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("invalid config: %v", err)
+	}
 
 	proxyHandler, err := proxy.New(cfg)
 	if err != nil {

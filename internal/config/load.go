@@ -1,25 +1,26 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
-	envConfigPath                = "ES_TMNT_CONFIG"
-	envHTTPPort                  = "ES_TMNT_HTTP_PORT"
-	envAdminPort                 = "ES_TMNT_ADMIN_PORT"
-	envUpstreamURL               = "ES_TMNT_UPSTREAM_URL"
-	envMode                      = "ES_TMNT_MODE"
-	envPassthrough               = "ES_TMNT_PASSTHROUGH"
-	envTenantRegexPattern        = "ES_TMNT_TENANT_REGEX_PATTERN"
-	envSharedIndexName           = "ES_TMNT_SHARED_INDEX_NAME"
-	envSharedIndexAliasFormat    = "ES_TMNT_SHARED_INDEX_ALIAS_FORMAT"
-	envSharedIndexTenantField    = "ES_TMNT_SHARED_INDEX_TENANT_FIELD"
-	envIndexPerTenantIndexFormat = "ES_TMNT_INDEX_PER_TENANT_FORMAT"
+	envConfigPath                  = "ES_TMNT_CONFIG"
+	envHTTPPort                    = "ES_TMNT_HTTP_PORT"
+	envAdminPort                   = "ES_TMNT_ADMIN_PORT"
+	envUpstreamURL                 = "ES_TMNT_UPSTREAM_URL"
+	envMode                        = "ES_TMNT_MODE"
+	envPassthroughPaths            = "ES_TMNT_PASSTHROUGH_PATHS"
+	envTenantRegexPattern          = "ES_TMNT_TENANT_REGEX_PATTERN"
+	envSharedIndexName             = "ES_TMNT_SHARED_INDEX_NAME"
+	envSharedIndexAliasTemplate    = "ES_TMNT_SHARED_INDEX_ALIAS_TEMPLATE"
+	envSharedIndexTenantField      = "ES_TMNT_SHARED_INDEX_TENANT_FIELD"
+	envIndexPerTenantIndexTemplate = "ES_TMNT_INDEX_PER_TENANT_TEMPLATE"
 )
 
 func Load() (Config, error) {
@@ -30,7 +31,7 @@ func Load() (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("read config file: %w", err)
 		}
-		if err := json.Unmarshal(data, &cfg); err != nil {
+		if err := yaml.Unmarshal(data, &cfg); err != nil {
 			return Config{}, fmt.Errorf("parse config file: %w", err)
 		}
 	}
@@ -41,10 +42,10 @@ func Load() (Config, error) {
 	overrideString(envMode, &cfg.Mode)
 	overrideString(envTenantRegexPattern, &cfg.TenantRegex.Pattern)
 	overrideString(envSharedIndexName, &cfg.SharedIndex.Name)
-	overrideString(envSharedIndexAliasFormat, &cfg.SharedIndex.AliasFormat)
+	overrideString(envSharedIndexAliasTemplate, &cfg.SharedIndex.AliasTemplate)
 	overrideString(envSharedIndexTenantField, &cfg.SharedIndex.TenantField)
-	overrideString(envIndexPerTenantIndexFormat, &cfg.IndexPerTenant.IndexFormat)
-	overridePassthrough(envPassthrough, &cfg.Passthrough)
+	overrideString(envIndexPerTenantIndexTemplate, &cfg.IndexPerTenant.IndexTemplate)
+	overridePassthrough(envPassthroughPaths, &cfg.PassthroughPaths)
 
 	return cfg, nil
 }

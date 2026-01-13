@@ -81,7 +81,7 @@ func (r *Router) Route(req *http.Request) (RouteResult, error) {
 func (r *Router) Rewrite(req *http.Request, route RouteResult) error {
 	mode := strings.ToLower(strings.TrimSpace(r.cfg.Mode))
 	switch mode {
-	case "shared-index":
+	case "shared":
 		return r.rewriteSharedIndex(req, route)
 	case "index-per-tenant":
 		return r.rewriteIndexPerTenant(req, route)
@@ -102,7 +102,7 @@ func (r *Router) rewriteSharedIndex(req *http.Request, route RouteResult) error 
 				return addTenantFilter(payload, r.cfg.SharedIndex.TenantField, route.Tenant)
 			})
 		}
-		alias := formatTemplate(r.cfg.SharedIndex.AliasFormat, route.Index, route.Tenant)
+		alias := formatTemplate(r.cfg.SharedIndex.AliasTemplate, route.Index, route.Tenant)
 		req.URL.Path = replaceIndex(route.Path, alias)
 		return nil
 	case ActionIndex:
@@ -135,7 +135,7 @@ func (r *Router) rewriteSharedIndex(req *http.Request, route RouteResult) error 
 			tenant:      route.Tenant,
 			tenantField: r.cfg.SharedIndex.TenantField,
 			targetIndex: r.cfg.SharedIndex.Name,
-			mode:        "shared-index",
+			mode:        "shared",
 		})
 	case ActionCatIndices:
 		if r.cfg.SharedIndex.Name == "" {
@@ -149,9 +149,9 @@ func (r *Router) rewriteSharedIndex(req *http.Request, route RouteResult) error 
 }
 
 func (r *Router) rewriteIndexPerTenant(req *http.Request, route RouteResult) error {
-	targetIndex := formatTemplate(r.cfg.IndexPerTenant.IndexFormat, route.Index, route.Tenant)
+	targetIndex := formatTemplate(r.cfg.IndexPerTenant.IndexTemplate, route.Index, route.Tenant)
 	if targetIndex == "" {
-		return fmt.Errorf("index-per-tenant format produced empty index")
+		return fmt.Errorf("index-per-tenant template produced empty index")
 	}
 	if route.Index != "" {
 		req.URL.Path = replaceIndex(route.Path, targetIndex)
@@ -200,7 +200,7 @@ func (r *Router) rewriteIndexPerTenant(req *http.Request, route RouteResult) err
 	case ActionBulk:
 		return rewriteBulkRequest(req, route, bulkRewriteConfig{
 			tenant:        route.Tenant,
-			indexTemplate: r.cfg.IndexPerTenant.IndexFormat,
+			indexTemplate: r.cfg.IndexPerTenant.IndexTemplate,
 			mode:          "index-per-tenant",
 		})
 	case ActionCatIndices:
@@ -446,7 +446,7 @@ func formatTemplate(template, index, tenant string) string {
 }
 
 func (r *Router) isPassthrough(path string) bool {
-	for _, prefix := range r.cfg.Passthrough {
+	for _, prefix := range r.cfg.PassthroughPaths {
 		if strings.HasPrefix(path, prefix) {
 			return true
 		}
@@ -564,12 +564,12 @@ func rewriteBulkRequest(req *http.Request, route RouteResult, cfg bulkRewriteCon
 			return fmt.Errorf("bulk action missing index")
 		}
 		switch cfg.mode {
-		case "shared-index":
+		case "shared":
 			meta["_index"] = cfg.targetIndex
 		case "index-per-tenant":
 			targetIndex := formatTemplate(cfg.indexTemplate, originalIndex, route.Tenant)
 			if targetIndex == "" {
-				return fmt.Errorf("index-per-tenant format produced empty index")
+				return fmt.Errorf("index-per-tenant template produced empty index")
 			}
 			meta["_index"] = targetIndex
 		default:
@@ -638,7 +638,7 @@ func parseBulkAction(line []byte) (string, map[string]interface{}, error) {
 
 func rewriteBulkSource(action string, payload interface{}, originalIndex string, cfg bulkRewriteConfig) (interface{}, error) {
 	switch cfg.mode {
-	case "shared-index":
+	case "shared":
 		switch action {
 		case "index", "create":
 			body, ok := payload.(map[string]interface{})
