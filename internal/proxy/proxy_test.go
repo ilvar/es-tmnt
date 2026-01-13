@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strings"
 	"sync"
 	"testing"
 
@@ -44,43 +46,31 @@ func newProxyWithServer(t *testing.T, cfg config.Config) (*Proxy, *capturedReque
 	server := httptest.NewServer(http.HandlerFunc(capture.handler))
 	t.Cleanup(server.Close)
 	cfg.UpstreamURL = server.URL
+	if cfg.TenantRegex.Compiled == nil {
+		compiled, err := regexp.Compile(cfg.TenantRegex.Pattern)
+		if err != nil {
+			t.Fatalf("compile tenant regex: %v", err)
+		}
+		cfg.TenantRegex.Compiled = compiled
+	}
 	proxyHandler, err := New(cfg)
 	if err != nil {
 		t.Fatalf("new proxy: %v", err)
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
-	proxyHandler.transport = transport
+	proxyHandler.proxy.Transport = transport
 	return proxyHandler, capture
-}
-
-func TestTenantExtraction(t *testing.T) {
-	cfg := config.Default()
-	router, err := NewRouter(cfg)
-	if err != nil {
-		t.Fatalf("new router: %v", err)
-	}
-	req := httptest.NewRequest(http.MethodGet, "/tenant/acme/index1/_search", nil)
-	route, err := router.Route(req)
-	if err != nil {
-		t.Fatalf("route: %v", err)
-	}
-	if route.Tenant != "acme" {
-		t.Fatalf("expected tenant acme, got %q", route.Tenant)
-	}
-	if route.Path != "/index1/_search" {
-		t.Fatalf("expected path /index1/_search, got %q", route.Path)
-	}
 }
 
 func TestSharedIndexSearchRewrite(t *testing.T) {
 	cfg := config.Default()
 	cfg.Mode = "shared"
-	cfg.SharedIndex.AliasTemplate = "{index}-{tenant}"
+	cfg.SharedIndex.AliasTemplate = "alias-{{.index}}-{{.tenant}}"
 	proxyHandler, capture := newProxyWithServer(t, cfg)
 
 	body := []byte(`{"query":{"match":{"field1":"value"}}}`)
-	req := httptest.NewRequest(http.MethodPost, "/tenant/acme/index1/_search", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/products-tenant1/_search", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(rec, req)
 
@@ -88,8 +78,8 @@ func TestSharedIndexSearchRewrite(t *testing.T) {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
 	path, capturedBody, _, _ := capture.snapshot()
-	if path != "/index1-acme/_search" {
-		t.Fatalf("expected path /index1-acme/_search, got %q", path)
+	if path != "/alias-products-tenant1/_search" {
+		t.Fatalf("expected path /alias-products-tenant1/_search, got %q", path)
 	}
 	if string(bytes.TrimSpace(capturedBody)) != string(bytes.TrimSpace(body)) {
 		t.Fatalf("expected body unchanged, got %s", string(capturedBody))
@@ -104,7 +94,7 @@ func TestSharedIndexIndexingRewrite(t *testing.T) {
 	proxyHandler, capture := newProxyWithServer(t, cfg)
 
 	reqBody := []byte(`{"field1":"value"}`)
-	req := httptest.NewRequest(http.MethodPut, "/tenant/acme/index1/_doc/1", bytes.NewReader(reqBody))
+	req := httptest.NewRequest(http.MethodPut, "/products-tenant1/_doc/1", bytes.NewReader(reqBody))
 	rec := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(rec, req)
 
@@ -119,19 +109,19 @@ func TestSharedIndexIndexingRewrite(t *testing.T) {
 	if err := json.Unmarshal(capturedBody, &payload); err != nil {
 		t.Fatalf("parse body: %v", err)
 	}
-	if payload["tenant_id"] != "acme" {
-		t.Fatalf("expected tenant_id acme, got %v", payload["tenant_id"])
+	if payload["tenant_id"] != "tenant1" {
+		t.Fatalf("expected tenant_id tenant1, got %v", payload["tenant_id"])
 	}
 }
 
 func TestIndexPerTenantSearchRewrite(t *testing.T) {
 	cfg := config.Default()
 	cfg.Mode = "index-per-tenant"
-	cfg.IndexPerTenant.IndexTemplate = "tenant-{tenant}"
+	cfg.IndexPerTenant.IndexTemplate = "shared-index"
 	proxyHandler, capture := newProxyWithServer(t, cfg)
 
 	reqBody := []byte(`{"query":{"match":{"field1":"value"}},"sort":["field2"]}`)
-	req := httptest.NewRequest(http.MethodPost, "/tenant/acme/index1/_search", bytes.NewReader(reqBody))
+	req := httptest.NewRequest(http.MethodPost, "/orders-tenant2/_search", bytes.NewReader(reqBody))
 	rec := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(rec, req)
 
@@ -139,8 +129,8 @@ func TestIndexPerTenantSearchRewrite(t *testing.T) {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
 	path, capturedBody, _, _ := capture.snapshot()
-	if path != "/tenant-acme/_search" {
-		t.Fatalf("expected path /tenant-acme/_search, got %q", path)
+	if path != "/shared-index/_search" {
+		t.Fatalf("expected path /shared-index/_search, got %q", path)
 	}
 	var payload map[string]interface{}
 	if err := json.Unmarshal(capturedBody, &payload); err != nil {
@@ -148,23 +138,27 @@ func TestIndexPerTenantSearchRewrite(t *testing.T) {
 	}
 	query := payload["query"].(map[string]interface{})
 	match := query["match"].(map[string]interface{})
-	if _, ok := match["index1.field1"]; !ok {
-		t.Fatalf("expected field index1.field1 in match, got %v", match)
+	if _, ok := match["orders.field1"]; !ok {
+		t.Fatalf("expected field orders.field1 in match, got %v", match)
 	}
 	sort := payload["sort"].([]interface{})
-	if sort[0].(string) != "index1.field2" {
-		t.Fatalf("expected sort index1.field2, got %v", sort)
+	if sort[0].(string) != "orders.field2" {
+		t.Fatalf("expected sort orders.field2, got %v", sort)
 	}
 }
 
-func TestIndexPerTenantMappingRewrite(t *testing.T) {
+func TestIndexPerTenantBulkRewrite(t *testing.T) {
 	cfg := config.Default()
 	cfg.Mode = "index-per-tenant"
-	cfg.IndexPerTenant.IndexTemplate = "tenant-{tenant}"
+	cfg.IndexPerTenant.IndexTemplate = "shared-index"
 	proxyHandler, capture := newProxyWithServer(t, cfg)
 
-	reqBody := []byte(`{"properties":{"field1":{"type":"text"},"field2":{"properties":{"sub":{"type":"keyword"}}}}}`)
-	req := httptest.NewRequest(http.MethodPut, "/tenant/acme/index1/_mapping", bytes.NewReader(reqBody))
+	bulkPayload := strings.Join([]string{
+		`{"index":{"_id":"1"}}`,
+		`{"field1":"value"}`,
+		"",
+	}, "\n")
+	req := httptest.NewRequest(http.MethodPost, "/orders-tenant2/_bulk", strings.NewReader(bulkPayload))
 	rec := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(rec, req)
 
@@ -172,45 +166,24 @@ func TestIndexPerTenantMappingRewrite(t *testing.T) {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
 	_, capturedBody, _, _ := capture.snapshot()
-	var payload map[string]interface{}
-	if err := json.Unmarshal(capturedBody, &payload); err != nil {
-		t.Fatalf("parse body: %v", err)
+	lines := strings.Split(strings.TrimSpace(string(capturedBody)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected bulk payload lines, got %v", lines)
 	}
-	props := payload["properties"].(map[string]interface{})
-	if _, ok := props["index1.field1"]; !ok {
-		t.Fatalf("expected index1.field1 property, got %v", props)
+	var action map[string]map[string]interface{}
+	if err := json.Unmarshal([]byte(lines[0]), &action); err != nil {
+		t.Fatalf("parse bulk action: %v", err)
 	}
-	field2 := props["index1.field2"].(map[string]interface{})
-	field2Props := field2["properties"].(map[string]interface{})
-	if _, ok := field2Props["sub"]; !ok {
-		t.Fatalf("expected nested sub property, got %v", field2Props)
+	indexMeta := action["index"]
+	if indexMeta["_index"] != "shared-index" {
+		t.Fatalf("expected _index shared-index, got %v", indexMeta["_index"])
 	}
-}
-
-func TestIndexPerTenantIndexingRewrite(t *testing.T) {
-	cfg := config.Default()
-	cfg.Mode = "index-per-tenant"
-	cfg.IndexPerTenant.IndexTemplate = "tenant-{tenant}"
-	proxyHandler, capture := newProxyWithServer(t, cfg)
-
-	reqBody := []byte(`{"field1":"value"}`)
-	req := httptest.NewRequest(http.MethodPost, "/tenant/acme/index1/_doc", bytes.NewReader(reqBody))
-	rec := httptest.NewRecorder()
-	proxyHandler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("unexpected status: %d", rec.Code)
+	var source map[string]interface{}
+	if err := json.Unmarshal([]byte(lines[1]), &source); err != nil {
+		t.Fatalf("parse bulk source: %v", err)
 	}
-	path, capturedBody, _, _ := capture.snapshot()
-	if path != "/tenant-acme/_doc" {
-		t.Fatalf("expected path /tenant-acme/_doc, got %q", path)
-	}
-	var payload map[string]interface{}
-	if err := json.Unmarshal(capturedBody, &payload); err != nil {
-		t.Fatalf("parse body: %v", err)
-	}
-	if _, ok := payload["index1"]; !ok {
-		t.Fatalf("expected index1 key, got %v", payload)
+	if _, ok := source["orders"]; !ok {
+		t.Fatalf("expected orders wrapper in bulk source, got %v", source)
 	}
 }
 
@@ -219,7 +192,7 @@ func TestUnsupportedRequestReturnsError(t *testing.T) {
 	cfg.Mode = "shared"
 	proxyHandler, capture := newProxyWithServer(t, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/tenant/acme/index1/_settings", nil)
+	req := httptest.NewRequest(http.MethodGet, "/products-tenant1/_settings", nil)
 	rec := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(rec, req)
 

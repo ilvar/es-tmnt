@@ -1,0 +1,31 @@
+services:
+  es:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200 > /dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  proxy:
+    build: .
+    depends_on:
+      es:
+        condition: service_healthy
+    environment:
+      - ES_TMNT_UPSTREAM_URL=http://es:9200
+      - ES_TMNT_HTTP_PORT=8080
+      - ES_TMNT_MODE=${ES_TMNT_MODE}
+      - ES_TMNT_TENANT_REGEX_PATTERN=${ES_TMNT_TENANT_REGEX_PATTERN}
+      - ES_TMNT_SHARED_INDEX_NAME=${ES_TMNT_SHARED_INDEX_NAME}
+      - ES_TMNT_SHARED_INDEX_ALIAS_TEMPLATE=${ES_TMNT_SHARED_INDEX_ALIAS_TEMPLATE}
+      - ES_TMNT_SHARED_INDEX_TENANT_FIELD=${ES_TMNT_SHARED_INDEX_TENANT_FIELD}
+      - ES_TMNT_INDEX_PER_TENANT_TEMPLATE=${ES_TMNT_INDEX_PER_TENANT_TEMPLATE}
+      - ES_TMNT_PASSTHROUGH_PATHS=${ES_TMNT_PASSTHROUGH_PATHS}
+    ports:
+      - "8080:8080"
