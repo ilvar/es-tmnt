@@ -75,8 +75,8 @@ func TestTenantExtraction(t *testing.T) {
 
 func TestSharedIndexSearchRewrite(t *testing.T) {
 	cfg := config.Default()
-	cfg.Mode = "shared-index"
-	cfg.SharedIndex.AliasFormat = "{index}-{tenant}"
+	cfg.Mode = "shared"
+	cfg.SharedIndex.AliasTemplate = "{index}-{tenant}"
 	proxyHandler, capture := newProxyWithServer(t, cfg)
 
 	body := []byte(`{"query":{"match":{"field1":"value"}}}`)
@@ -98,7 +98,7 @@ func TestSharedIndexSearchRewrite(t *testing.T) {
 
 func TestSharedIndexIndexingRewrite(t *testing.T) {
 	cfg := config.Default()
-	cfg.Mode = "shared-index"
+	cfg.Mode = "shared"
 	cfg.SharedIndex.Name = "shared-index"
 	cfg.SharedIndex.TenantField = "tenant_id"
 	proxyHandler, capture := newProxyWithServer(t, cfg)
@@ -127,7 +127,7 @@ func TestSharedIndexIndexingRewrite(t *testing.T) {
 func TestIndexPerTenantSearchRewrite(t *testing.T) {
 	cfg := config.Default()
 	cfg.Mode = "index-per-tenant"
-	cfg.IndexPerTenant.IndexFormat = "tenant-{tenant}"
+	cfg.IndexPerTenant.IndexTemplate = "tenant-{tenant}"
 	proxyHandler, capture := newProxyWithServer(t, cfg)
 
 	reqBody := []byte(`{"query":{"match":{"field1":"value"}},"sort":["field2"]}`)
@@ -160,7 +160,7 @@ func TestIndexPerTenantSearchRewrite(t *testing.T) {
 func TestIndexPerTenantMappingRewrite(t *testing.T) {
 	cfg := config.Default()
 	cfg.Mode = "index-per-tenant"
-	cfg.IndexPerTenant.IndexFormat = "tenant-{tenant}"
+	cfg.IndexPerTenant.IndexTemplate = "tenant-{tenant}"
 	proxyHandler, capture := newProxyWithServer(t, cfg)
 
 	reqBody := []byte(`{"properties":{"field1":{"type":"text"},"field2":{"properties":{"sub":{"type":"keyword"}}}}}`)
@@ -190,7 +190,7 @@ func TestIndexPerTenantMappingRewrite(t *testing.T) {
 func TestIndexPerTenantIndexingRewrite(t *testing.T) {
 	cfg := config.Default()
 	cfg.Mode = "index-per-tenant"
-	cfg.IndexPerTenant.IndexFormat = "tenant-{tenant}"
+	cfg.IndexPerTenant.IndexTemplate = "tenant-{tenant}"
 	proxyHandler, capture := newProxyWithServer(t, cfg)
 
 	reqBody := []byte(`{"field1":"value"}`)
@@ -216,7 +216,7 @@ func TestIndexPerTenantIndexingRewrite(t *testing.T) {
 
 func TestUnsupportedRequestReturnsError(t *testing.T) {
 	cfg := config.Default()
-	cfg.Mode = "shared-index"
+	cfg.Mode = "shared"
 	proxyHandler, capture := newProxyWithServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/tenant/acme/index1/_settings", nil)
