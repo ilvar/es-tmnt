@@ -1,25 +1,69 @@
 package proxy
 
 import (
-	"net/http"
+	"fmt"
 	"regexp"
+	"strings"
+
+	"es-tmnt/internal/config"
 )
 
-var tenantPattern = regexp.MustCompile(`^/tenant/([^/]+)/`)
+const (
+	tenantPrefixGroup  = "prefix"
+	tenantIDGroup      = "tenant"
+	tenantPostfixGroup = "postfix"
+)
 
-type RequestInfo struct {
-	Path          string
-	Tenant        string
-	IsPassthrough bool
+type TenantExtractor struct {
+	regex       *regexp.Regexp
+	prefixIndex int
+	tenantIndex int
+	postIndex   int
 }
 
-func ParseRequest(r *http.Request, rewriter *Rewriter) RequestInfo {
-	info := RequestInfo{Path: r.URL.Path}
-	if matches := tenantPattern.FindStringSubmatch(r.URL.Path); len(matches) == 2 {
-		info.Tenant = matches[1]
+func NewTenantExtractor(cfg config.Config) (*TenantExtractor, error) {
+	if strings.TrimSpace(cfg.TenantRegex.Pattern) == "" {
+		return nil, fmt.Errorf("tenant regex pattern is required")
 	}
-	if rewriter != nil {
-		info.IsPassthrough = rewriter.isPassthrough(r.URL.Path)
+	compiled, err := regexp.Compile(cfg.TenantRegex.Pattern)
+	if err != nil {
+		return nil, fmt.Errorf("compile tenant regex: %w", err)
 	}
-	return info
+	prefixIndex := compiled.SubexpIndex(tenantPrefixGroup)
+	tenantIndex := compiled.SubexpIndex(tenantIDGroup)
+	postIndex := compiled.SubexpIndex(tenantPostfixGroup)
+	if prefixIndex < 0 || tenantIndex < 0 || postIndex < 0 {
+		return nil, fmt.Errorf("tenant regex must include named capture groups %q, %q, and %q",
+			tenantPrefixGroup, tenantIDGroup, tenantPostfixGroup)
+	}
+	return &TenantExtractor{
+		regex:       compiled,
+		prefixIndex: prefixIndex,
+		tenantIndex: tenantIndex,
+		postIndex:   postIndex,
+	}, nil
+}
+
+func (t *TenantExtractor) Extract(path string) (tenant string, rewritten string, ok bool) {
+	matches := t.regex.FindStringSubmatch(path)
+	if matches == nil {
+		return "", path, false
+	}
+	tenant = matches[t.tenantIndex]
+	prefix := matches[t.prefixIndex]
+	postfix := matches[t.postIndex]
+	switch {
+	case prefix == "" && postfix == "":
+		rewritten = "/"
+	case prefix == "":
+		rewritten = postfix
+	case postfix == "":
+		rewritten = prefix
+	default:
+		rewritten = prefix + postfix
+	}
+	if rewritten == "" {
+		rewritten = "/"
+	}
+	return tenant, rewritten, true
 }
