@@ -9,15 +9,17 @@ import (
 )
 
 const (
-	envConfigPath   = "ES_TMNT_CONFIG"
-	envHTTPPort     = "ES_TMNT_HTTP_PORT"
-	envAdminPort    = "ES_TMNT_ADMIN_PORT"
-	envUpstreamURL  = "ES_TMNT_UPSTREAM_URL"
-	envMode         = "ES_TMNT_MODE"
-	envPassthrough  = "ES_TMNT_PASSTHROUGH"
-	envRegexEnabled = "ES_TMNT_REGEX_ENABLED"
-	envRegexPattern = "ES_TMNT_REGEX_PATTERN"
-	envRegexReplace = "ES_TMNT_REGEX_REPLACEMENT"
+	envConfigPath                = "ES_TMNT_CONFIG"
+	envHTTPPort                  = "ES_TMNT_HTTP_PORT"
+	envAdminPort                 = "ES_TMNT_ADMIN_PORT"
+	envUpstreamURL               = "ES_TMNT_UPSTREAM_URL"
+	envMode                      = "ES_TMNT_MODE"
+	envPassthrough               = "ES_TMNT_PASSTHROUGH"
+	envTenantRegexPattern        = "ES_TMNT_TENANT_REGEX_PATTERN"
+	envSharedIndexName           = "ES_TMNT_SHARED_INDEX_NAME"
+	envSharedIndexAliasFormat    = "ES_TMNT_SHARED_INDEX_ALIAS_FORMAT"
+	envSharedIndexTenantField    = "ES_TMNT_SHARED_INDEX_TENANT_FIELD"
+	envIndexPerTenantIndexFormat = "ES_TMNT_INDEX_PER_TENANT_FORMAT"
 )
 
 func Load() (Config, error) {
@@ -37,9 +39,11 @@ func Load() (Config, error) {
 	overrideInt(envAdminPort, &cfg.Ports.Admin)
 	overrideString(envUpstreamURL, &cfg.UpstreamURL)
 	overrideString(envMode, &cfg.Mode)
-	overrideBool(envRegexEnabled, &cfg.Regex.Enabled)
-	overrideString(envRegexPattern, &cfg.Regex.Pattern)
-	overrideString(envRegexReplace, &cfg.Regex.Replacement)
+	overrideString(envTenantRegexPattern, &cfg.TenantRegex.Pattern)
+	overrideString(envSharedIndexName, &cfg.SharedIndex.Name)
+	overrideString(envSharedIndexAliasFormat, &cfg.SharedIndex.AliasFormat)
+	overrideString(envSharedIndexTenantField, &cfg.SharedIndex.TenantField)
+	overrideString(envIndexPerTenantIndexFormat, &cfg.IndexPerTenant.IndexFormat)
 	overridePassthrough(envPassthrough, &cfg.Passthrough)
 
 	return cfg, nil

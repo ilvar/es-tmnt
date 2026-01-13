@@ -12,7 +12,7 @@ import (
 type Proxy struct {
 	cfg       config.Config
 	upstream  *url.URL
-	rewriter  *Rewriter
+	router    *Router
 	transport http.RoundTripper
 }
 
@@ -21,25 +21,36 @@ func New(cfg config.Config) (*Proxy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse upstream url: %w", err)
 	}
+	router, err := NewRouter(cfg)
+	if err != nil {
+		return nil, err
+	}
 	return &Proxy{
 		cfg:       cfg,
 		upstream:  upstream,
-		rewriter:  NewRewriter(cfg),
+		router:    router,
 		transport: http.DefaultTransport,
 	}, nil
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	info := ParseRequest(r, p.rewriter)
-	if info.Tenant != "" {
-		r.Header.Set("X-ES-Tenant", info.Tenant)
+	route, err := p.router.Route(r)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("unsupported request: %v", err), http.StatusBadRequest)
+		return
+	}
+	if route.Action != ActionPassthrough {
+		if err := p.router.Rewrite(r, route); err != nil {
+			http.Error(w, fmt.Sprintf("rewrite error: %v", err), http.StatusBadRequest)
+			return
+		}
+		r.Header.Set("X-ES-Tenant", route.Tenant)
 	}
 	proxied := httputil.NewSingleHostReverseProxy(p.upstream)
 	proxied.Transport = p.transport
 	originalDirector := proxied.Director
 	proxied.Director = func(req *http.Request) {
 		originalDirector(req)
-		req.URL.Path = p.rewriter.RewritePath(req.URL.Path)
 		req.Host = p.upstream.Host
 	}
 	proxied.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {

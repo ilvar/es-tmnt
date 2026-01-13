@@ -29,12 +29,18 @@ Set `ES_TMNT_CONFIG=/path/to/config.json` to load a JSON config file.
     "admin": 9090
   },
   "upstream_url": "http://localhost:9200",
-  "mode": "regex",
+  "mode": "shared-index",
   "passthrough": ["/_cluster", "/_security"],
-  "regex": {
-    "enabled": true,
-    "pattern": "^/tenant/([^/]+)/",
-    "replacement": "/$1/"
+  "tenant_regex": {
+    "pattern": "^(?P<prefix>.*)/tenant/(?P<tenant>[^/]+)(?P<postfix>/.*)?$"
+  },
+  "shared_index": {
+    "name": "shared-index",
+    "alias_format": "{index}-{tenant}",
+    "tenant_field": "tenant_id"
+  },
+  "index_per_tenant": {
+    "index_format": "tenant-{tenant}"
   },
   "read_timeout": "10s",
   "write_timeout": "10s",
@@ -48,11 +54,13 @@ Set `ES_TMNT_CONFIG=/path/to/config.json` to load a JSON config file.
 - `ES_TMNT_HTTP_PORT`: Port for the proxy HTTP server.
 - `ES_TMNT_ADMIN_PORT`: Port for the admin server (0 disables it).
 - `ES_TMNT_UPSTREAM_URL`: Upstream Elasticsearch URL.
-- `ES_TMNT_MODE`: Rewrite mode (`regex` or `passthrough`).
+- `ES_TMNT_MODE`: Tenant mode (`shared-index` or `index-per-tenant`).
 - `ES_TMNT_PASSTHROUGH`: Comma-separated list of path prefixes that bypass rewriting.
-- `ES_TMNT_REGEX_ENABLED`: `true`/`false` to enable regex rewriting.
-- `ES_TMNT_REGEX_PATTERN`: Regex pattern applied to the request path.
-- `ES_TMNT_REGEX_REPLACEMENT`: Replacement string for regex rewriting.
+- `ES_TMNT_TENANT_REGEX_PATTERN`: Regex pattern with `prefix`, `tenant`, and `postfix` capture groups.
+- `ES_TMNT_SHARED_INDEX_NAME`: Shared index name for shared-index mode.
+- `ES_TMNT_SHARED_INDEX_ALIAS_FORMAT`: Alias template for shared-index mode (supports `{index}` and `{tenant}`).
+- `ES_TMNT_SHARED_INDEX_TENANT_FIELD`: Tenant field injected into indexed documents.
+- `ES_TMNT_INDEX_PER_TENANT_FORMAT`: Index template for index-per-tenant mode (supports `{tenant}`).
 
-The proxy extracts a tenant name from paths like `/tenant/{name}/...` and forwards it in the
+The proxy extracts a tenant name from paths using the configured regex and forwards it in the
 `X-ES-Tenant` header.
