@@ -1,12 +1,12 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -31,7 +31,7 @@ func Load() (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("read config file: %w", err)
 		}
-		if err := yaml.Unmarshal(data, &cfg); err != nil {
+		if err := json.Unmarshal(data, &cfg); err != nil {
 			return Config{}, fmt.Errorf("parse config file: %w", err)
 		}
 	}
@@ -46,6 +46,16 @@ func Load() (Config, error) {
 	overrideString(envSharedIndexTenantField, &cfg.SharedIndex.TenantField)
 	overrideString(envIndexPerTenantIndexTemplate, &cfg.IndexPerTenant.IndexTemplate)
 	overridePassthrough(envPassthroughPaths, &cfg.PassthroughPaths)
+
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+
+	compiled, err := regexp.Compile(cfg.TenantRegex.Pattern)
+	if err != nil {
+		return Config{}, fmt.Errorf("tenant_regex.pattern is invalid: %w", err)
+	}
+	cfg.TenantRegex.Compiled = compiled
 
 	return cfg, nil
 }

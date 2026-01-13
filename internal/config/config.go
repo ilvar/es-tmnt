@@ -1,61 +1,55 @@
 package config
 
-import "time"
+import "regexp"
+
+type Config struct {
+	Ports            Ports          `yaml:"ports"`
+	UpstreamURL      string         `yaml:"upstream_url"`
+	Mode             string         `yaml:"mode"`
+	TenantRegex      TenantRegex    `yaml:"tenant_regex"`
+	SharedIndex      SharedIndex    `yaml:"shared_index"`
+	IndexPerTenant   IndexPerTenant `yaml:"index_per_tenant"`
+	PassthroughPaths []string       `yaml:"passthrough_paths"`
+}
 
 type Ports struct {
-	HTTP  int `json:"http" yaml:"http"`
-	Admin int `json:"admin" yaml:"admin"`
+	HTTP  int `yaml:"http"`
+	Admin int `yaml:"admin"`
 }
 
 type TenantRegex struct {
-	Pattern string `json:"pattern" yaml:"pattern"`
+	Pattern  string         `yaml:"pattern"`
+	Compiled *regexp.Regexp `yaml:"-"`
 }
 
 type SharedIndex struct {
-	Name          string `json:"name" yaml:"name"`
-	AliasTemplate string `json:"alias_template" yaml:"alias_template"`
-	TenantField   string `json:"tenant_field" yaml:"tenant_field"`
+	Name          string `yaml:"name"`
+	AliasTemplate string `yaml:"alias_template"`
+	TenantField   string `yaml:"tenant_field"`
 }
 
 type IndexPerTenant struct {
-	IndexTemplate string `json:"index_template" yaml:"index_template"`
-}
-
-type Config struct {
-	Ports            Ports          `json:"ports" yaml:"ports"`
-	UpstreamURL      string         `json:"upstream_url" yaml:"upstream_url"`
-	Mode             string         `json:"mode" yaml:"mode"`
-	PassthroughPaths []string       `json:"passthrough_paths" yaml:"passthrough_paths"`
-	TenantRegex      TenantRegex    `json:"tenant_regex" yaml:"tenant_regex"`
-	SharedIndex      SharedIndex    `json:"shared_index" yaml:"shared_index"`
-	IndexPerTenant   IndexPerTenant `json:"index_per_tenant" yaml:"index_per_tenant"`
-	ReadTimeout      time.Duration  `json:"read_timeout" yaml:"read_timeout"`
-	WriteTimeout     time.Duration  `json:"write_timeout" yaml:"write_timeout"`
-	IdleTimeout      time.Duration  `json:"idle_timeout" yaml:"idle_timeout"`
+	IndexTemplate string `yaml:"index_template"`
 }
 
 func Default() Config {
 	return Config{
 		Ports: Ports{
 			HTTP:  8080,
-			Admin: 0,
+			Admin: 8081,
 		},
-		UpstreamURL:      "http://localhost:9200",
-		Mode:             "shared",
-		PassthroughPaths: []string{},
+		UpstreamURL: "http://localhost:9200",
+		Mode:        "shared",
 		TenantRegex: TenantRegex{
-			Pattern: `^(?P<prefix>.*)/tenant/(?P<tenant>[^/]+)(?P<postfix>/.*)?$`,
+			Pattern: `^(?P<prefix>[^-]+)-(?P<tenant>[^-]+)(?P<postfix>.*)$`,
 		},
 		SharedIndex: SharedIndex{
-			Name:          "shared-index",
-			AliasTemplate: "{index}-{tenant}",
+			Name:          "{{.index}}",
+			AliasTemplate: "alias-{{.index}}-{{.tenant}}",
 			TenantField:   "tenant_id",
 		},
 		IndexPerTenant: IndexPerTenant{
-			IndexTemplate: "tenant-{tenant}",
+			IndexTemplate: "shared-index",
 		},
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
 	}
 }
