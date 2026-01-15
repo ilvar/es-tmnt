@@ -145,11 +145,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			p.reject(w, "unsupported system endpoint")
 			return
 		case "_explain":
-			if len(segments) == 1 {
-				p.setResponseMode(w, responseModeHandled)
-				p.handleExplain(w, r, "")
-				return
-			}
 			p.setResponseMode(w, responseModeHandled)
 			p.reject(w, "unsupported system endpoint")
       return
