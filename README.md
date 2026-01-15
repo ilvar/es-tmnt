@@ -19,6 +19,7 @@ list return a 4xx error unless they are explicitly configured as passthrough pat
 | `/{index}` | `PUT`, `DELETE` | Index create/delete requests target the shared or per-tenant index, and creation bodies can rewrite mappings. |
 | `/{index}/_mapping` | `PUT`, `POST` | Mapping updates are rewritten in index-per-tenant mode to nest field mappings under the base index name. |
 | `/{index}/_get/{id}` | `GET` | Rewritten into a tenant-scoped `_search` using an `ids` query. |
+| `/{index}/_source/{id}` | `GET` | Rewritten into a tenant-scoped `_search` using an `ids` query. |
 | `/{index}/_mget` | `POST` | Rewritten into a tenant-scoped `_search` using an `ids` query. |
 | `/{index}/_delete/{id}` | `DELETE` | Rewritten into a tenant-scoped `_delete_by_query` using an `ids` query. |
 | `/{index}/_delete_by_query` | `POST` | Query bodies are rewritten in index-per-tenant mode; shared mode uses tenant alias routing. |
@@ -27,6 +28,7 @@ list return a 4xx error unless they are explicitly configured as passthrough pat
 | `/_delete_by_query`, `/_update_by_query` | `POST` | Supported when an `index` query parameter is supplied; behaves like the index-scoped variants. |
 | `/{index}/_query`, `/{index}/_rank_eval`, `/_query`, `/_rank_eval` | `GET`, `POST` | Query and rank eval requests are rewritten per tenancy mode. Root endpoints require an `index` query parameter. |
 | `/{index}/_explain` | `GET`, `POST` | Explain requests are rewritten per tenancy mode. |
+| `/{index}/_search_shards`, `/{index}/_field_caps`, `/{index}/_terms_enum` | `GET`, `POST` | Routed to the shared or per-tenant index without body rewriting. |
 | Index management endpoints | varies | `/{index}/_settings`, `/{index}/_stats`, `/{index}/_segments`, `/{index}/_recovery`, `/{index}/_refresh`, `/{index}/_flush`, `/{index}/_forcemerge`, `/{index}/_cache/clear`, `/{index}/_open`, `/{index}/_close`, `/{index}/_shrink`, `/{index}/_split`, `/{index}/_rollover`, `/{index}/_clone`, `/{index}/_freeze`, `/{index}/_unfreeze`, `/{index}/_upgrade`, `/{index}/_alias/*` are routed to the shared or per-tenant index without body rewriting. |
 | Document passthrough endpoints | varies | `/{index}/_termvectors/*`, `/{index}/_mtermvectors` are forwarded to the shared or per-tenant index without body rewriting. |
 | `/_cat/indices` | `GET` | Cat indices responses include `TENANT_ID` for indices matching the tenant regex. |
@@ -79,16 +81,13 @@ endpoint under each pattern is currently unhandled unless listed in
 
 #### Document APIs (other than `_doc` and `_update`)
 
-- `/{index}/_source/*`
 - `/{index}/_validate/query`
-- `/{index}/_search_shards`, `/{index}/_field_caps`
 
 #### Search, query, and analytics
 
 - `/_explain`
 - `/_search/scroll`, `/_scroll`, `/_clear/scroll`, `/_pit`
 - `/_async_search/*`, `/_knn_search`, `/_eql/*`, `/_sql/*`
-- `/_terms_enum`
 - `/{index}/_mvt/*`
 - `/_application/*`, `/_query_rules/*`, `/_synonyms/*`
 
