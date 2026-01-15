@@ -223,6 +223,13 @@ func (p *Proxy) rewriteRollupBody(body []byte) ([]byte, error) {
 		}
 		payload["index_pattern"] = rewritten
 	}
+	if rollupIndexValue, ok := payload["rollup_index"]; ok {
+		rewritten, err := p.rewriteTargetIndexValue(rollupIndexValue)
+		if err != nil {
+			return nil, err
+		}
+		payload["rollup_index"] = rewritten
+	}
 	return json.Marshal(payload)
 }
 
