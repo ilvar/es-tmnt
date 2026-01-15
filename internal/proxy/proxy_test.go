@@ -306,9 +306,8 @@ func TestSnapshotPassthrough(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	path, _, _, count := capture.snapshot()
-	
-  if count != 1 {
+	path, _, _, _, count := capture.snapshot()
+	if count != 1 {
 		t.Fatalf("expected upstream call, got %d", count)
 	}
 	if path != "/_snapshot/test-repo" {
@@ -330,12 +329,15 @@ func TestSearchRootRewrite(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	path, _, _, count := capture.snapshot()
+	path, query, _, _, count := capture.snapshot()
 	if count != 1 {
 		t.Fatalf("expected upstream call, got %d", count)
 	}
-	if path != "/_snapshot/test-repo" {
-		t.Fatalf("expected path /_snapshot/test-repo, got %q", path)
+	if path != "/_search" {
+		t.Fatalf("expected path /_search, got %q", path)
+	}
+	if got := queryValue(query, "index"); got != "shared-index" {
+		t.Fatalf("expected index shared-index, got %q", got)
 	}
 }
 
@@ -348,21 +350,27 @@ func TestTransformIndexRewrite(t *testing.T) {
 
 	body := []byte(`{"source":{"index":"orders-tenant1"},"dest":{"index":"stats-tenant1"}}`)
 	req := httptest.NewRequest(http.MethodPut, "/_transform/orders", bytes.NewReader(body))
-	path, query, capturedBody, _, _ := capture.snapshot()
-	if path != "/_search" {
-		t.Fatalf("expected path /_search, got %q", path)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	if got := queryValue(query, "index"); got != "shared-index" {
-		t.Fatalf("expected index shared-index, got %q", got)
+	path, _, capturedBody, _, _ := capture.snapshot()
+	if path != "/_transform/orders" {
+		t.Fatalf("expected path /_transform/orders, got %q", path)
 	}
 	var payload map[string]interface{}
 	if err := json.Unmarshal(capturedBody, &payload); err != nil {
 		t.Fatalf("parse body: %v", err)
 	}
-	searchQuery := payload["query"].(map[string]interface{})
-	match := searchQuery["match"].(map[string]interface{})
-	if _, ok := match["orders.field1"]; !ok {
-		t.Fatalf("expected field orders.field1 in match, got %v", match)
+	source := payload["source"].(map[string]interface{})
+	if source["index"] != "alias-orders-tenant1" {
+		t.Fatalf("expected source index alias-orders-tenant1, got %v", source["index"])
+	}
+	dest := payload["dest"].(map[string]interface{})
+	if dest["index"] != "shared-stats" {
+		t.Fatalf("expected dest index shared-stats, got %v", dest["index"])
 	}
 }
 
@@ -379,19 +387,12 @@ func TestAnalyzeIndexRewrite(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-  
-	_, capturedBody, _, _ := capture.snapshot()
-	var payload map[string]interface{}
-	if err := json.Unmarshal(capturedBody, &payload); err != nil {
-		t.Fatalf("parse body: %v", err)
+	path, query, _, _, _ := capture.snapshot()
+	if path != "/_analyze" {
+		t.Fatalf("expected path /_analyze, got %q", path)
 	}
-	source := payload["source"].(map[string]interface{})
-	if source["index"] != "alias-orders-tenant1" {
-		t.Fatalf("expected source index alias-orders-tenant1, got %v", source["index"])
-	}
-	dest := payload["dest"].(map[string]interface{})
-	if dest["index"] != "shared-stats" {
-		t.Fatalf("expected dest index shared-stats, got %v", dest["index"])
+	if got := queryValue(query, "index"); got != "shared-index" {
+		t.Fatalf("expected index shared-index, got %q", got)
 	}
 }
 
@@ -399,16 +400,30 @@ func TestRollupIndexPatternRewrite(t *testing.T) {
 	cfg := config.Default()
 	cfg.Mode = "shared"
 	cfg.SharedIndex.AliasTemplate = "alias-{{.index}}-{{.tenant}}"
+	cfg.SharedIndex.Name = "shared-{{.index}}"
 	proxyHandler, capture := newProxyWithServer(t, cfg)
 
 	body := []byte(`{"index_pattern":"logs-tenant1-*","rollup_index":"rollup-tenant1"}`)
 	req := httptest.NewRequest(http.MethodPut, "/_rollup/job/logs", bytes.NewReader(body))
-	path, query, _, _, _ := capture.snapshot()
-	if path != "/_analyze" {
-		t.Fatalf("expected path /_analyze, got %q", path)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	if got := queryValue(query, "index"); got != "shared-index" {
-		t.Fatalf("expected index shared-index, got %q", got)
+	path, _, capturedBody, _, _ := capture.snapshot()
+	if path != "/_rollup/job/logs" {
+		t.Fatalf("expected path /_rollup/job/logs, got %q", path)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(capturedBody, &payload); err != nil {
+		t.Fatalf("parse body: %v", err)
+	}
+	if payload["index_pattern"] != "alias-logs-*-tenant1" {
+		t.Fatalf("expected index_pattern alias-logs-*-tenant1, got %v", payload["index_pattern"])
+	}
+	if payload["rollup_index"] != "shared-rollup" {
+		t.Fatalf("expected rollup_index shared-rollup, got %v", payload["rollup_index"])
 	}
 }
 
@@ -484,7 +499,7 @@ func TestIndexPassthroughSettingsRewrite(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	path, _, method, _ := capture.snapshot()
+	path, _, _, method, _ := capture.snapshot()
 	if method != http.MethodGet {
 		t.Fatalf("expected method GET, got %s", method)
 	}
@@ -506,7 +521,7 @@ func TestGetRequestRewritesToSearch(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	path, capturedBody, method, _ := capture.snapshot()
+	path, _, capturedBody, method, _ := capture.snapshot()
 	if method != http.MethodPost {
 		t.Fatalf("expected method POST, got %s", method)
 	}
@@ -538,7 +553,7 @@ func TestMgetRequestRewritesToSearch(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	path, capturedBody, method, _ := capture.snapshot()
+	path, _, capturedBody, method, _ := capture.snapshot()
 	if method != http.MethodPost {
 		t.Fatalf("expected method POST, got %s", method)
 	}
@@ -568,7 +583,7 @@ func TestDeleteByQueryRewritesQuery(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	path, capturedBody, _, _ := capture.snapshot()
+	path, _, capturedBody, _, _ := capture.snapshot()
 	if path != "/shared-index/_delete_by_query" {
 		t.Fatalf("expected path /shared-index/_delete_by_query, got %q", path)
 	}

@@ -147,8 +147,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "_explain":
 			p.setResponseMode(w, responseModeHandled)
 			p.reject(w, "unsupported system endpoint")
-      return
-    }
+			return
+		}
 		if segments[0] == "_delete_by_query" {
 			p.setResponseMode(w, responseModeHandled)
 			p.handleRootQueryByIndex(w, r, "_delete_by_query")
@@ -216,10 +216,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "_query", "_rank_eval":
 		p.handleQueryEndpoint(w, r, index)
 	case "_explain":
-    p.handleExplain(w, r, index)
+		p.handleExplain(w, r, index)
 	case "_alias", "_settings", "_stats", "_segments", "_recovery", "_refresh", "_flush", "_forcemerge",
 		"_open", "_close", "_shrink", "_split", "_rollover", "_clone", "_freeze", "_unfreeze", "_upgrade",
-		"_termvectors", "_mtermvectors", "_explain":
+		"_termvectors", "_mtermvectors":
 		p.handleIndexPassthrough(w, r, index)
 	case "_get":
 		if len(segments) < 3 {
@@ -238,9 +238,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		p.handleDelete(w, r, index, segments[2])
 	case "_delete_by_query":
-		p.handleQueryEndpoint(w, r, index, "_delete_by_query")
+		p.handleNamedQueryEndpoint(w, r, index, "_delete_by_query")
 	case "_update_by_query":
-		p.handleQueryEndpoint(w, r, index, "_update_by_query")
+		p.handleNamedQueryEndpoint(w, r, index, "_update_by_query")
 	case "_count":
 		p.handleCount(w, r, index)
 	default:
@@ -667,8 +667,25 @@ func (p *Proxy) handleTransform(w http.ResponseWriter, r *http.Request) {
 	p.proxy.ServeHTTP(w, r)
 }
 
-
-func (p *Proxy) handleRollup(w http.ResponseWriter, r *http.Request) {}
+func (p *Proxy) handleRollup(w http.ResponseWriter, r *http.Request) {
+	if r.Body != nil {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			p.reject(w, "failed to read body")
+			return
+		}
+		if len(bytes.TrimSpace(body)) != 0 {
+			rewritten, err := p.rewriteRollupBody(body)
+			if err != nil {
+				p.reject(w, err.Error())
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(rewritten))
+			r.ContentLength = int64(len(rewritten))
+		}
+	}
+	p.proxy.ServeHTTP(w, r)
+}
 
 func (p *Proxy) handleIndexPassthrough(w http.ResponseWriter, r *http.Request, index string) {
 	baseIndex, tenantID, err := p.parseIndex(index)
@@ -685,7 +702,7 @@ func (p *Proxy) handleIndexPassthrough(w http.ResponseWriter, r *http.Request, i
 	p.proxy.ServeHTTP(w, r)
 }
 
-func (p *Proxy) handleQueryEndpoint(w http.ResponseWriter, r *http.Request, index, endpoint string) {
+func (p *Proxy) handleNamedQueryEndpoint(w http.ResponseWriter, r *http.Request, index, endpoint string) {
 	baseIndex, tenantID, err := p.parseIndex(index)
 	if err != nil {
 		p.reject(w, err.Error())
@@ -859,7 +876,7 @@ func (p *Proxy) handleRootQueryByIndex(w http.ResponseWriter, r *http.Request, e
 	}
 	query.Del("index")
 	r.URL.RawQuery = query.Encode()
-	p.handleQueryEndpoint(w, r, index, endpoint)
+	p.handleNamedQueryEndpoint(w, r, index, endpoint)
 }
 
 func (p *Proxy) rewriteIndexPath(r *http.Request, original, replacement string) {
@@ -1196,7 +1213,7 @@ func (p *Proxy) isSystemPassthrough(pathValue string) bool {
 		strings.HasPrefix(pathValue, "/_ml") ||
 		strings.HasPrefix(pathValue, "/_watcher") ||
 		strings.HasPrefix(pathValue, "/_graph") ||
-		strings.HasPrefix(pathValue, "/_ccr")
+		strings.HasPrefix(pathValue, "/_ccr") ||
 		strings.HasPrefix(pathValue, "/_alias") ||
 		strings.HasPrefix(pathValue, "/_aliases") ||
 		strings.HasPrefix(pathValue, "/_template") ||
