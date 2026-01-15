@@ -50,7 +50,7 @@ func TestRewriteBulkBodyErrors(t *testing.T) {
 		},
 		{
 			name:    "missing source",
-			body:    `{"index":{"_id":"1"}}` + "\n",
+			body:    `{"index":{"_id":"1"}}`,
 			wantErr: "bulk payload missing source",
 		},
 		{
@@ -105,17 +105,17 @@ func TestRewriteMappingBodyErrors(t *testing.T) {
 	cfg.Mode = "index-per-tenant"
 	proxyHandler, _ := newProxyWithServer(t, cfg)
 
-	_, err := proxyHandler.rewriteMappingBody([]byte(`{\"mappings\":\"bad\"}`), "orders")
+	_, err := proxyHandler.rewriteMappingBody([]byte(`{"mappings":"bad"}`), "orders")
 	if err == nil || !strings.Contains(err.Error(), "mappings must be an object") {
 		t.Fatalf("expected mappings object error, got %v", err)
 	}
 
-	_, err = proxyHandler.rewriteMappingBody([]byte(`{\"mappings\":{\"properties\":\"bad\"}}`), "orders")
+	_, err = proxyHandler.rewriteMappingBody([]byte(`{"mappings":{"properties":"bad"}}`), "orders")
 	if err == nil || !strings.Contains(err.Error(), "mappings.properties must be an object") {
 		t.Fatalf("expected mappings.properties error, got %v", err)
 	}
 
-	_, err = proxyHandler.rewriteMappingBody([]byte(`{\"properties\":\"bad\"}`), "orders")
+	_, err = proxyHandler.rewriteMappingBody([]byte(`{"properties":"bad"}`), "orders")
 	if err == nil || !strings.Contains(err.Error(), "properties must be an object") {
 		t.Fatalf("expected properties object error, got %v", err)
 	}
@@ -152,7 +152,7 @@ func TestRewriteMultiSearchBodyErrors(t *testing.T) {
 		},
 		{
 			name:    "missing body",
-			body:    `{"index":"orders-tenant1"}` + "\n",
+			body:    `{"index":"orders-tenant1"}`,
 			wantErr: "msearch payload missing body",
 		},
 	}
