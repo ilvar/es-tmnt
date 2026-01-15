@@ -468,21 +468,34 @@ func TestMultiSearchRewrite(t *testing.T) {
 	}
 }
 
-func TestUnsupportedRequestReturnsError(t *testing.T) {
+func TestSourceRequestRewritesToSearch(t *testing.T) {
 	cfg := config.Default()
 	cfg.Mode = "shared"
+	cfg.SharedIndex.AliasTemplate = "alias-{{.index}}-{{.tenant}}"
 	proxyHandler, capture := newProxyWithServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/products-tenant1/_source/1", nil)
 	rec := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected status 400, got %d", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	_, _, _, _, count := capture.snapshot()
-	if count != 0 {
-		t.Fatalf("expected no upstream calls, got %d", count)
+	path, _, capturedBody, method, _ := capture.snapshot()
+	if method != http.MethodPost {
+		t.Fatalf("expected method POST, got %s", method)
+	}
+	if path != "/alias-products-tenant1/_search" {
+		t.Fatalf("expected path /alias-products-tenant1/_search, got %q", path)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(capturedBody, &payload); err != nil {
+		t.Fatalf("parse body: %v", err)
+	}
+	query := payload["query"].(map[string]interface{})
+	ids := query["ids"].(map[string]interface{})["values"].([]interface{})
+	if ids[0].(string) != "1" {
+		t.Fatalf("expected id 1, got %v", ids)
 	}
 }
 
@@ -505,6 +518,72 @@ func TestIndexPassthroughSettingsRewrite(t *testing.T) {
 	}
 	if path != "/shared-products/_settings" {
 		t.Fatalf("expected path /shared-products/_settings, got %q", path)
+	}
+}
+
+func TestSearchShardsReroutesToIndex(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "shared"
+	cfg.SharedIndex.Name = "shared-{{.index}}"
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/products-tenant1/_search_shards", nil)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, _, _, method, _ := capture.snapshot()
+	if method != http.MethodGet {
+		t.Fatalf("expected method GET, got %s", method)
+	}
+	if path != "/shared-products/_search_shards" {
+		t.Fatalf("expected path /shared-products/_search_shards, got %q", path)
+	}
+}
+
+func TestFieldCapsReroutesToIndex(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "index-per-tenant"
+	cfg.IndexPerTenant.IndexTemplate = "tenant-{{.index}}-{{.tenant}}"
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/orders-tenant2/_field_caps", nil)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, _, _, method, _ := capture.snapshot()
+	if method != http.MethodGet {
+		t.Fatalf("expected method GET, got %s", method)
+	}
+	if path != "/tenant-orders-tenant2/_field_caps" {
+		t.Fatalf("expected path /tenant-orders-tenant2/_field_caps, got %q", path)
+	}
+}
+
+func TestTermsEnumReroutesToIndex(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "index-per-tenant"
+	cfg.IndexPerTenant.IndexTemplate = "tenant-{{.index}}-{{.tenant}}"
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodPost, "/orders-tenant2/_terms_enum", bytes.NewReader([]byte(`{"field":"status"}`)))
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, _, _, method, _ := capture.snapshot()
+	if method != http.MethodPost {
+		t.Fatalf("expected method POST, got %s", method)
+	}
+	if path != "/tenant-orders-tenant2/_terms_enum" {
+		t.Fatalf("expected path /tenant-orders-tenant2/_terms_enum, got %q", path)
 	}
 }
 

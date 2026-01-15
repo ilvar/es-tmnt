@@ -241,6 +241,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p.handleGet(w, r, index, segments[2])
+	case "_source":
+		if len(segments) < 3 {
+			p.reject(w, "missing document id")
+			return
+		}
+		p.handleSource(w, r, index, segments[2])
 	case "_analyze":
 		p.handleAnalyze(w, r, index)
 	case "_mget":
@@ -257,6 +263,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.handleNamedQueryEndpoint(w, r, index, "_update_by_query")
 	case "_count":
 		p.handleCount(w, r, index)
+	case "_search_shards", "_field_caps", "_terms_enum":
+		p.handleIndexPassthrough(w, r, index)
 	default:
 		if segments[1] == "_cache" && len(segments) > 2 && segments[2] == "clear" {
 			p.handleIndexPassthrough(w, r, index)
@@ -264,10 +272,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if segments[1] == "_validate" && len(segments) > 2 && segments[2] == "query" {
 			p.handleValidateQuery(w, r, index)
-			return
-		}
-		if segments[1] == "_search_shards" || segments[1] == "_field_caps" {
-			p.reject(w, "unsupported endpoint")
 			return
 		}
 		p.reject(w, "unsupported endpoint")
@@ -783,6 +787,19 @@ func (p *Proxy) handleNamedQueryEndpoint(w http.ResponseWriter, r *http.Request,
 }
 
 func (p *Proxy) handleGet(w http.ResponseWriter, r *http.Request, index, docID string) {
+	if docID == "" {
+		p.reject(w, "missing document id")
+		return
+	}
+	query, err := buildIDsQuery([]string{docID})
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	p.handleQuerySearch(w, r, index, query)
+}
+
+func (p *Proxy) handleSource(w http.ResponseWriter, r *http.Request, index, docID string) {
 	if docID == "" {
 		p.reject(w, "missing document id")
 		return
