@@ -164,6 +164,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			p.proxy.ServeHTTP(w, r)
 			return
 		}
+		if segments[0] == "_transform" {
+			p.setResponseMode(w, responseModeHandled)
+			p.handleTransform(w, r)
+			return
+		}
+		if segments[0] == "_rollup" {
+			p.setResponseMode(w, responseModeHandled)
+			p.handleRollup(w, r)
+			return
+		}
 		if p.isSystemPassthrough(r.URL.Path) {
 			p.setResponseMode(w, responseModePassthrough)
 			p.proxy.ServeHTTP(w, r)
@@ -636,6 +646,29 @@ func (p *Proxy) handleMapping(w http.ResponseWriter, r *http.Request, index stri
 	p.rewriteIndexPath(r, index, targetIndex)
 	p.proxy.ServeHTTP(w, r)
 }
+
+func (p *Proxy) handleTransform(w http.ResponseWriter, r *http.Request) {
+	if r.Body != nil {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			p.reject(w, "failed to read body")
+			return
+		}
+		if len(bytes.TrimSpace(body)) != 0 {
+			rewritten, err := p.rewriteTransformBody(body)
+			if err != nil {
+				p.reject(w, err.Error())
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(rewritten))
+			r.ContentLength = int64(len(rewritten))
+		}
+	}
+	p.proxy.ServeHTTP(w, r)
+}
+
+
+func (p *Proxy) handleRollup(w http.ResponseWriter, r *http.Request) {}
 
 func (p *Proxy) handleIndexPassthrough(w http.ResponseWriter, r *http.Request, index string) {
 	baseIndex, tenantID, err := p.parseIndex(index)
@@ -1149,6 +1182,21 @@ func (p *Proxy) isSystemPassthrough(pathValue string) bool {
 	return strings.HasPrefix(pathValue, "/_cluster") ||
 		strings.HasPrefix(pathValue, "/_cat") ||
 		strings.HasPrefix(pathValue, "/_nodes") ||
+		strings.HasPrefix(pathValue, "/_snapshot") ||
+		strings.HasPrefix(pathValue, "/_searchable_snapshots") ||
+		strings.HasPrefix(pathValue, "/_slm") ||
+		strings.HasPrefix(pathValue, "/_ilm") ||
+		strings.HasPrefix(pathValue, "/_tasks") ||
+		strings.HasPrefix(pathValue, "/_scripts") ||
+		strings.HasPrefix(pathValue, "/_autoscaling") ||
+		strings.HasPrefix(pathValue, "/_migration") ||
+		strings.HasPrefix(pathValue, "/_features") ||
+		strings.HasPrefix(pathValue, "/_security") ||
+		strings.HasPrefix(pathValue, "/_license") ||
+		strings.HasPrefix(pathValue, "/_ml") ||
+		strings.HasPrefix(pathValue, "/_watcher") ||
+		strings.HasPrefix(pathValue, "/_graph") ||
+		strings.HasPrefix(pathValue, "/_ccr")
 		strings.HasPrefix(pathValue, "/_alias") ||
 		strings.HasPrefix(pathValue, "/_aliases") ||
 		strings.HasPrefix(pathValue, "/_template") ||

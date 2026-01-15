@@ -258,6 +258,109 @@ func (p *Proxy) rewriteMappingBody(body []byte, baseIndex string) ([]byte, error
 	return json.Marshal(payload)
 }
 
+func (p *Proxy) rewriteTransformBody(body []byte) ([]byte, error) {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("invalid JSON body: %w", err)
+	}
+	if sourceValue, ok := payload["source"]; ok {
+		source, ok := sourceValue.(map[string]interface{})
+		if !ok {
+			return nil, errors.New("transform source must be an object")
+		}
+		if indexValue, ok := source["index"]; ok {
+			rewritten, err := p.rewriteSourceIndexValue(indexValue)
+			if err != nil {
+				return nil, err
+			}
+			source["index"] = rewritten
+			payload["source"] = source
+		}
+	}
+	if destValue, ok := payload["dest"]; ok {
+		dest, ok := destValue.(map[string]interface{})
+		if !ok {
+			return nil, errors.New("transform dest must be an object")
+		}
+		if indexValue, ok := dest["index"]; ok {
+			rewritten, err := p.rewriteTargetIndexValue(indexValue)
+			if err != nil {
+				return nil, err
+			}
+			dest["index"] = rewritten
+			payload["dest"] = dest
+		}
+	}
+	return json.Marshal(payload)
+}
+
+func (p *Proxy) rewriteRollupBody(body []byte) ([]byte, error) {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("invalid JSON body: %w", err)
+	}
+	if patternValue, ok := payload["index_pattern"]; ok {
+		rewritten, err := p.rewriteSourceIndexValue(patternValue)
+		if err != nil {
+			return nil, err
+		}
+		payload["index_pattern"] = rewritten
+	}
+	if rollupIndexValue, ok := payload["rollup_index"]; ok {
+		rewritten, err := p.rewriteTargetIndexValue(rollupIndexValue)
+		if err != nil {
+			return nil, err
+		}
+		payload["rollup_index"] = rewritten
+	}
+	return json.Marshal(payload)
+}
+
+func (p *Proxy) rewriteSourceIndexValue(value interface{}) (interface{}, error) {
+	return p.rewriteIndexValue(value, true)
+}
+
+func (p *Proxy) rewriteTargetIndexValue(value interface{}) (interface{}, error) {
+	return p.rewriteIndexValue(value, false)
+}
+
+func (p *Proxy) rewriteIndexValue(value interface{}, aliasForShared bool) (interface{}, error) {
+	switch typed := value.(type) {
+	case string:
+		return p.rewriteIndexName(typed, aliasForShared)
+	case []interface{}:
+		output := make([]interface{}, 0, len(typed))
+		for _, item := range typed {
+			itemString, ok := item.(string)
+			if !ok {
+				return nil, errors.New("index list values must be strings")
+			}
+			rewritten, err := p.rewriteIndexName(itemString, aliasForShared)
+			if err != nil {
+				return nil, err
+			}
+			output = append(output, rewritten)
+		}
+		return output, nil
+	default:
+		return nil, errors.New("index must be a string or list")
+	}
+}
+
+func (p *Proxy) rewriteIndexName(index string, aliasForShared bool) (string, error) {
+	baseIndex, tenantID, err := p.parseIndex(index)
+	if err != nil {
+		return "", err
+	}
+	if isSharedMode(p.cfg.Mode) {
+		if aliasForShared {
+			return p.renderAlias(baseIndex, tenantID)
+		}
+		return p.renderIndex(p.sharedIndex, baseIndex, tenantID)
+	}
+	return p.renderIndex(p.perTenantIdx, baseIndex, tenantID)
+}
+
 func rewriteQueryValue(value interface{}, baseIndex string) interface{} {
 	switch typed := value.(type) {
 	case map[string]interface{}:

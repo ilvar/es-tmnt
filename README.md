@@ -27,6 +27,8 @@ list return a 4xx error unless they are explicitly configured as passthrough pat
 | Index management endpoints | varies | `/{index}/_settings`, `/{index}/_stats`, `/{index}/_segments`, `/{index}/_recovery`, `/{index}/_refresh`, `/{index}/_flush`, `/{index}/_forcemerge`, `/{index}/_cache/clear`, `/{index}/_open`, `/{index}/_close`, `/{index}/_shrink`, `/{index}/_split`, `/{index}/_rollover`, `/{index}/_clone`, `/{index}/_freeze`, `/{index}/_unfreeze`, `/{index}/_upgrade`, `/{index}/_alias/*` are routed to the shared or per-tenant index without body rewriting. |
 | Document passthrough endpoints | varies | `/{index}/_termvectors/*`, `/{index}/_mtermvectors`, `/{index}/_explain/*` are forwarded to the shared or per-tenant index without body rewriting. |
 | `/_cat/indices` | `GET` | Cat indices responses include `TENANT_ID` for indices matching the tenant regex. |
+| `/_transform/*` | `GET`, `PUT`, `POST`, `DELETE` | Transform bodies rewrite source indices for search and destination indices for writes. |
+| `/_rollup/*` | `GET`, `PUT`, `POST`, `DELETE` | Rollup bodies rewrite `index_pattern` for tenant-aware searches. |
 
 All other `/_*` system endpoints (outside the cluster passthrough list), index endpoints,
 and unsupported methods return a 400 error unless configured as passthrough paths.
@@ -54,9 +56,13 @@ Configured passthrough paths bypass all proxy logic and are forwarded directly t
 Elasticsearch. A trailing `*` in the configuration acts as a prefix match.
 
 Cluster-level system APIs are also forwarded by default, including `/_cluster/*`,
-`/_cat/*` (except `/_cat/indices`), and `/_nodes/*`. The proxy also forwards
+`/_cat/*` (except `/_cat/indices`), `/_nodes/*`, `/_snapshot/*`,
 `/_alias/*`, `/_aliases`, `/_template/*`, `/_index_template/*`, `/_component_template/*`,
-`/_resolve/*`, `/_data_stream/*`, and `/_dangling/*` without modification.
+`/_resolve/*`, `/_data_stream/*`, and `/_dangling/*`
+`/_searchable_snapshots/*`, `/_slm/*`, `/_ilm/*`, `/_tasks/*`, `/_scripts/*`,
+`/_autoscaling/*`, `/_migration/*`, `/_features/*`, `/_security/*`, `/_license/*`,
+`/_ml/*`, `/_watcher/*`, `/_graph/*`, and `/_ccr/*`.
+
 
 ### TODO: Unhandled Elasticsearch REST endpoints
 
@@ -94,34 +100,6 @@ endpoint under each pattern is currently unhandled unless listed in
 - `/_ingest/*`
 - `/_enrich/*`
 
-#### Snapshot and lifecycle management
-
-- `/_snapshot/*`
-- `/_searchable_snapshots/*`
-- `/_slm/*`
-- `/_ilm/*`
-
-#### Tasks, scripts, and cluster utilities
-
-- `/_tasks/*`
-- `/_scripts/*`
-- `/_autoscaling/*`
-- `/_migration/*`
-- `/_features/*`
-
-#### Security, licensing, and governance
-
-- `/_security/*`
-- `/_license/*`
-
-#### Machine learning and advanced features
-
-- `/_ml/*`
-- `/_transform/*`
-- `/_rollup/*`
-- `/_watcher/*`
-- `/_graph/*`
-- `/_ccr/*`
 
 ## Development
 
