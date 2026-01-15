@@ -1,0 +1,56 @@
+name: Unit Tests
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run unit tests
+        run: ./scripts/run-unit-tests.sh
+
+      - name: Capture coverage
+        id: coverage
+        run: |
+          total=$(go tool cover -func=coverage/unit.out | awk '/^total:/{sub(/%/,"",$3); print $3}')
+          echo "total=${total}" >> "$GITHUB_OUTPUT"
+
+      - name: Compare coverage against base
+        run: |
+          base_ref="${{ github.base_ref }}"
+          if [ -z "$base_ref" ]; then
+            base_ref="${{ github.event.repository.default_branch }}"
+          fi
+          if [ -z "$base_ref" ]; then
+            echo "No base ref available for coverage comparison."
+            exit 0
+          fi
+
+          git fetch origin "$base_ref"
+
+          worktree_dir=$(mktemp -d)
+          git worktree add "$worktree_dir" "origin/$base_ref"
+          pushd "$worktree_dir" >/dev/null
+          ./scripts/run-unit-tests.sh
+          base_total=$(go tool cover -func=coverage/unit.out | awk '/^total:/{sub(/%/,"",$3); print $3}')
+          popd >/dev/null
+          git worktree remove "$worktree_dir"
+
+          head_total="${{ steps.coverage.outputs.total }}"
+          echo "Base coverage: $base_total%"
+          echo "Head coverage: $head_total%"
+
+          awk -v head="$head_total" -v base="$base_total" 'BEGIN { if (head+0 < base+0) { printf("Coverage decreased from %.1f%% to %.1f%%\n", base, head); exit 1 } }'

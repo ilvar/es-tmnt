@@ -50,7 +50,7 @@ func TestRewriteBulkBodyErrors(t *testing.T) {
 		},
 		{
 			name:    "missing source",
-			body:    `{"index":{"_id":"1"}}` + "\n",
+			body:    `{"index":{"_id":"1"}}`,
 			wantErr: "bulk payload missing source",
 		},
 		{
@@ -152,7 +152,7 @@ func TestRewriteMultiSearchBodyErrors(t *testing.T) {
 		},
 		{
 			name:    "missing body",
-			body:    `{"index":"orders-tenant1"}` + "\n",
+			body:    `{"index":"orders-tenant1"}`,
 			wantErr: "msearch payload missing body",
 		},
 	}
