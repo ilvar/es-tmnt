@@ -17,6 +17,15 @@ list return a 4xx error unless they are explicitly configured as passthrough pat
 | `/_bulk` | `POST` | Root bulk endpoint is supported with the same rewrite behavior. |
 | `/{index}` | `PUT`, `DELETE` | Index create/delete requests target the shared or per-tenant index, and creation bodies can rewrite mappings. |
 | `/{index}/_mapping` | `PUT`, `POST` | Mapping updates are rewritten in index-per-tenant mode to nest field mappings under the base index name. |
+| `/{index}/_get/{id}` | `GET` | Rewritten into a tenant-scoped `_search` using an `ids` query. |
+| `/{index}/_mget` | `POST` | Rewritten into a tenant-scoped `_search` using an `ids` query. |
+| `/{index}/_delete/{id}` | `DELETE` | Rewritten into a tenant-scoped `_delete_by_query` using an `ids` query. |
+| `/{index}/_delete_by_query` | `POST` | Query bodies are rewritten in index-per-tenant mode; shared mode uses tenant alias routing. |
+| `/{index}/_update_by_query` | `POST` | Query bodies are rewritten in index-per-tenant mode; shared mode uses tenant alias routing. |
+| `/{index}/_count` | `GET`, `POST` | Rewritten into a tenant-scoped `_search` with `size: 0`. |
+| `/_delete_by_query`, `/_update_by_query` | `POST` | Supported when an `index` query parameter is supplied; behaves like the index-scoped variants. |
+| Index management endpoints | varies | `/{index}/_settings`, `/{index}/_stats`, `/{index}/_segments`, `/{index}/_recovery`, `/{index}/_refresh`, `/{index}/_flush`, `/{index}/_forcemerge`, `/{index}/_cache/clear`, `/{index}/_open`, `/{index}/_close`, `/{index}/_shrink`, `/{index}/_split`, `/{index}/_rollover`, `/{index}/_clone`, `/{index}/_freeze`, `/{index}/_unfreeze`, `/{index}/_upgrade`, `/{index}/_alias/*` are routed to the shared or per-tenant index without body rewriting. |
+| Document passthrough endpoints | varies | `/{index}/_termvectors/*`, `/{index}/_mtermvectors`, `/{index}/_explain/*` are forwarded to the shared or per-tenant index without body rewriting. |
 | `/_cat/indices` | `GET` | Cat indices responses include `TENANT_ID` for indices matching the tenant regex. |
 
 All other `/_*` system endpoints (outside the cluster passthrough list), index endpoints,
@@ -45,7 +54,9 @@ Configured passthrough paths bypass all proxy logic and are forwarded directly t
 Elasticsearch. A trailing `*` in the configuration acts as a prefix match.
 
 Cluster-level system APIs are also forwarded by default, including `/_cluster/*`,
-`/_cat/*` (except `/_cat/indices`), and `/_nodes/*`.
+`/_cat/*` (except `/_cat/indices`), and `/_nodes/*`. The proxy also forwards
+`/_alias/*`, `/_aliases`, `/_template/*`, `/_index_template/*`, `/_component_template/*`,
+`/_resolve/*`, `/_data_stream/*`, and `/_dangling/*` without modification.
 
 ### TODO: Unhandled Elasticsearch REST endpoints
 
@@ -59,21 +70,11 @@ endpoint under each pattern is currently unhandled unless listed in
 - `/_alias/*`, `/_aliases`
 - `/_template/*`, `/_index_template/*`, `/_component_template/*`
 - `/_resolve/*`, `/_data_stream/*`, `/_dangling/*`
-- `/{index}/_alias/*`
-- `/{index}/_settings`, `/{index}/_stats`, `/{index}/_segments`, `/{index}/_recovery`
-- `/{index}/_refresh`, `/{index}/_flush`, `/{index}/_forcemerge`, `/{index}/_cache/clear`
-- `/{index}/_open`, `/{index}/_close`, `/{index}/_shrink`, `/{index}/_split`,
-  `/{index}/_rollover`, `/{index}/_clone`, `/{index}/_freeze`, `/{index}/_unfreeze`,
-  `/{index}/_upgrade`
 
 #### Document APIs (other than `_doc` and `_update`)
 
-- `/{index}/_get/*`, `/{index}/_mget`
-- `/{index}/_delete/*`, `/{index}/_delete_by_query`, `/_delete_by_query`
-- `/{index}/_termvectors/*`, `/{index}/_mtermvectors`
-- `/{index}/_explain/*`, `/{index}/_source/*`
-- `/{index}/_update_by_query`, `/_update_by_query`
-- `/{index}/_rank_eval`, `/{index}/_count`, `/{index}/_validate/query`
+- `/{index}/_source/*`
+- `/{index}/_rank_eval`, `/{index}/_validate/query`
 - `/{index}/_search_shards`, `/{index}/_field_caps`
 
 #### Search, query, and analytics

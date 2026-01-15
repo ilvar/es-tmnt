@@ -395,7 +395,7 @@ func TestUnsupportedRequestReturnsError(t *testing.T) {
 	cfg.Mode = "shared"
 	proxyHandler, capture := newProxyWithServer(t, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/products-tenant1/_settings", nil)
+	req := httptest.NewRequest(http.MethodGet, "/products-tenant1/_source/1", nil)
 	rec := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(rec, req)
 
@@ -405,5 +405,117 @@ func TestUnsupportedRequestReturnsError(t *testing.T) {
 	_, _, _, _, count := capture.snapshot()
 	if count != 0 {
 		t.Fatalf("expected no upstream calls, got %d", count)
+	}
+}
+
+func TestIndexPassthroughSettingsRewrite(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "shared"
+	cfg.SharedIndex.Name = "shared-{{.index}}"
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/products-tenant1/_settings", nil)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, _, method, _ := capture.snapshot()
+	if method != http.MethodGet {
+		t.Fatalf("expected method GET, got %s", method)
+	}
+	if path != "/shared-products/_settings" {
+		t.Fatalf("expected path /shared-products/_settings, got %q", path)
+	}
+}
+
+func TestGetRequestRewritesToSearch(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "shared"
+	cfg.SharedIndex.AliasTemplate = "alias-{{.index}}-{{.tenant}}"
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/products-tenant1/_get/42", nil)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, capturedBody, method, _ := capture.snapshot()
+	if method != http.MethodPost {
+		t.Fatalf("expected method POST, got %s", method)
+	}
+	if path != "/alias-products-tenant1/_search" {
+		t.Fatalf("expected path /alias-products-tenant1/_search, got %q", path)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(capturedBody, &payload); err != nil {
+		t.Fatalf("parse body: %v", err)
+	}
+	query := payload["query"].(map[string]interface{})
+	ids := query["ids"].(map[string]interface{})["values"].([]interface{})
+	if ids[0].(string) != "42" {
+		t.Fatalf("expected id 42, got %v", ids)
+	}
+}
+
+func TestMgetRequestRewritesToSearch(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "index-per-tenant"
+	cfg.IndexPerTenant.IndexTemplate = "shared-index"
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	body := []byte(`{"ids":["1","2"]}`)
+	req := httptest.NewRequest(http.MethodPost, "/orders-tenant2/_mget", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, capturedBody, method, _ := capture.snapshot()
+	if method != http.MethodPost {
+		t.Fatalf("expected method POST, got %s", method)
+	}
+	if path != "/shared-index/_search" {
+		t.Fatalf("expected path /shared-index/_search, got %q", path)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(capturedBody, &payload); err != nil {
+		t.Fatalf("parse body: %v", err)
+	}
+	if payload["size"].(float64) != 2 {
+		t.Fatalf("expected size 2, got %v", payload["size"])
+	}
+}
+
+func TestDeleteByQueryRewritesQuery(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "index-per-tenant"
+	cfg.IndexPerTenant.IndexTemplate = "shared-index"
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	body := []byte(`{"query":{"match":{"field1":"value"}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/orders-tenant2/_delete_by_query", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, capturedBody, _, _ := capture.snapshot()
+	if path != "/shared-index/_delete_by_query" {
+		t.Fatalf("expected path /shared-index/_delete_by_query, got %q", path)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(capturedBody, &payload); err != nil {
+		t.Fatalf("parse body: %v", err)
+	}
+	query := payload["query"].(map[string]interface{})
+	match := query["match"].(map[string]interface{})
+	if _, ok := match["orders.field1"]; !ok {
+		t.Fatalf("expected field orders.field1 in match, got %v", match)
 	}
 }
