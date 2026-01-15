@@ -29,8 +29,11 @@ list return a 4xx error unless they are explicitly configured as passthrough pat
 | `/{index}/_query`, `/{index}/_rank_eval`, `/_query`, `/_rank_eval` | `GET`, `POST` | Query and rank eval requests are rewritten per tenancy mode. Root endpoints require an `index` query parameter. |
 | `/{index}/_explain` | `GET`, `POST` | Explain requests are rewritten per tenancy mode. |
 | `/{index}/_search_shards`, `/{index}/_field_caps`, `/{index}/_terms_enum` | `GET`, `POST` | Routed to the shared or per-tenant index without body rewriting. |
-| Index management endpoints | varies | `/{index}/_settings`, `/{index}/_stats`, `/{index}/_segments`, `/{index}/_recovery`, `/{index}/_refresh`, `/{index}/_flush`, `/{index}/_forcemerge`, `/{index}/_cache/clear`, `/{index}/_open`, `/{index}/_close`, `/{index}/_shrink`, `/{index}/_split`, `/{index}/_rollover`, `/{index}/_clone`, `/{index}/_freeze`, `/{index}/_unfreeze`, `/{index}/_upgrade`, `/{index}/_alias/*` are routed to the shared or per-tenant index without body rewriting. |
-| Document passthrough endpoints | varies | `/{index}/_termvectors/*`, `/{index}/_mtermvectors` are forwarded to the shared or per-tenant index without body rewriting. |
+| `/{index}/_settings`, `/{index}/_stats`, `/{index}/_segments`, `/{index}/_recovery`, `/{index}/_refresh` | varies | Routed to the shared or per-tenant index without body rewriting. |
+| `/{index}/_flush`, `/{index}/_forcemerge`, `/{index}/_cache/clear`, `/{index}/_open`, `/{index}/_close` | varies | Routed to the shared or per-tenant index without body rewriting. |
+| `/{index}/_shrink`, `/{index}/_split`, `/{index}/_rollover`, `/{index}/_clone`, `/{index}/_freeze` | varies | Routed to the shared or per-tenant index without body rewriting. |
+| `/{index}/_unfreeze`, `/{index}/_upgrade`, `/{index}/_alias/*` | varies | Routed to the shared or per-tenant index without body rewriting. |
+| `/{index}/_termvectors/*`, `/{index}/_mtermvectors` | varies | Forwarded to the shared or per-tenant index without body rewriting. |
 | `/_cat/indices` | `GET` | Cat indices responses include `TENANT_ID` for indices matching the tenant regex. |
 | `/_analyze`, `/{index}/_analyze` | `GET`, `POST` | Analyze requests are routed to the tenant index based on the `index` query parameter or path. |
 | `/_msearch` | `POST` | Multi-search requests are rewritten per tenancy mode. |
@@ -63,13 +66,17 @@ and unsupported methods return a 400 error unless configured as passthrough path
 Configured passthrough paths bypass all proxy logic and are forwarded directly to
 Elasticsearch. A trailing `*` in the configuration acts as a prefix match.
 
-Cluster-level system APIs are also forwarded by default, including `/_cluster/*`,
-`/_cat/*` (except `/_cat/indices`), `/_nodes/*`, `/_snapshot/*`,
-`/_alias/*`, `/_aliases`, `/_template/*`, `/_index_template/*`, `/_component_template/*`,
-`/_resolve/*`, `/_data_stream/*`, `/_dangling/*`,
-`/_searchable_snapshots/*`, `/_slm/*`, `/_ilm/*`, `/_tasks/*`, `/_scripts/*`,
-`/_autoscaling/*`, `/_migration/*`, `/_features/*`, `/_security/*`, `/_license/*`,
-`/_ml/*`, `/_watcher/*`, `/_graph/*`, and `/_ccr/*`.
+Cluster-level system APIs are also forwarded by default, grouped as follows:
+
+- Cluster and cat APIs: `/_cluster/*`, `/_cat/*` (except `/_cat/indices`), `/_nodes/*`
+- Snapshot and storage APIs: `/_snapshot/*`, `/_searchable_snapshots/*`
+- Alias and template APIs: `/_alias/*`, `/_aliases`, `/_template/*`,
+  `/_index_template/*`, `/_component_template/*`
+- Data stream and resolve APIs: `/_resolve/*`, `/_data_stream/*`, `/_dangling/*`
+- Lifecycle and task APIs: `/_slm/*`, `/_ilm/*`, `/_tasks/*`, `/_scripts/*`
+- Autoscaling and migration APIs: `/_autoscaling/*`, `/_migration/*`, `/_features/*`
+- Security and licensing APIs: `/_security/*`, `/_license/*`
+- ML, watcher, graph, and CCR APIs: `/_ml/*`, `/_watcher/*`, `/_graph/*`, `/_ccr/*`
 
 
 ### TODO: Unhandled Elasticsearch REST endpoints
@@ -107,6 +114,14 @@ ES_TMNT_HTTP_PORT=8080 ES_TMNT_UPSTREAM_URL=http://localhost:9200 go run ./cmd/e
 
 Configuration can be supplied via environment variables or a JSON config file path in
 `ES_TMNT_CONFIG`.
+
+## Unit tests
+
+Run the unit test suite with the helper script:
+
+```bash
+./test.sh
+```
 
 ## Integration tests
 
