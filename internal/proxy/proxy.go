@@ -910,6 +910,9 @@ func (p *Proxy) rewriteIndexQueryParam(r *http.Request, key string) (string, err
 
 func (p *Proxy) rewriteQueryRequest(r *http.Request, baseIndex string) error {
 	if r.Body == nil {
+		if r.Method == http.MethodPost || r.Method == http.MethodPut {
+			return errors.New("missing body")
+		}
 		return nil
 	}
 	body, err := io.ReadAll(r.Body)
