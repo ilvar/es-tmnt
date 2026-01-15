@@ -30,6 +30,12 @@ type Proxy struct {
 	passthroughs []string
 }
 
+const (
+	responseModeHeader      = "X-ES-TMNT"
+	responseModeHandled     = "handled"
+	responseModePassthrough = "pass-through"
+)
+
 func New(cfg config.Config) (*Proxy, error) {
 	parsed, err := url.Parse(cfg.UpstreamURL)
 	if err != nil {
@@ -68,31 +74,43 @@ func New(cfg config.Config) (*Proxy, error) {
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if p.isPassthrough(r.URL.Path) {
+		p.setResponseMode(w, responseModePassthrough)
 		p.proxy.ServeHTTP(w, r)
 		return
 	}
 	segments := splitPath(r.URL.Path)
 	if len(segments) == 0 {
+		p.setResponseMode(w, responseModeHandled)
 		p.reject(w, "unsupported path")
 		return
 	}
 	if strings.HasPrefix(segments[0], "_") {
 		if segments[0] == "_bulk" {
+			p.setResponseMode(w, responseModeHandled)
 			p.handleBulk(w, r, "")
 			return
 		}
+		if segments[0] == "_cat" && len(segments) > 1 && segments[1] == "indices" {
+			p.setResponseMode(w, responseModeHandled)
+			p.handleCatIndices(w, r)
+			return
+		}
 		if p.isSystemPassthrough(r.URL.Path) {
+			p.setResponseMode(w, responseModePassthrough)
 			p.proxy.ServeHTTP(w, r)
 			return
 		}
+		p.setResponseMode(w, responseModeHandled)
 		p.reject(w, "unsupported system endpoint")
 		return
 	}
 	index := segments[0]
 	if len(segments) == 1 {
+		p.setResponseMode(w, responseModeHandled)
 		p.handleIndexRoot(w, r, index)
 		return
 	}
+	p.setResponseMode(w, responseModeHandled)
 	switch segments[1] {
 	case "_search":
 		p.handleSearch(w, r, index)
@@ -148,6 +166,41 @@ func (p *Proxy) handleSearch(w http.ResponseWriter, r *http.Request, index strin
 		r.ContentLength = int64(len(rewritten))
 	}
 	p.rewriteIndexPath(r, index, aliasIndex)
+	p.proxy.ServeHTTP(w, r)
+}
+
+func (p *Proxy) handleCatIndices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		p.reject(w, "unsupported method for cat indices")
+		return
+	}
+	segments := splitPath(r.URL.Path)
+	if len(segments) != 3 || segments[2] == "" {
+		p.reject(w, "missing index")
+		return
+	}
+	indexValues := strings.Split(segments[2], ",")
+	targets := make([]string, 0, len(indexValues))
+	for _, index := range indexValues {
+		if index == "" {
+			p.reject(w, "invalid index")
+			return
+		}
+		baseIndex, tenantID, err := p.parseIndex(index)
+		if err != nil {
+			p.reject(w, err.Error())
+			return
+		}
+		targetIndex, err := p.renderTargetIndex(baseIndex, tenantID)
+		if err != nil {
+			p.reject(w, err.Error())
+			return
+		}
+		targets = append(targets, targetIndex)
+	}
+	segments[2] = strings.Join(targets, ",")
+	r.URL.Path = "/" + path.Join(segments...)
+	r.RequestURI = r.URL.Path
 	p.proxy.ServeHTTP(w, r)
 }
 
@@ -505,4 +558,8 @@ func (p *Proxy) isSystemPassthrough(pathValue string) bool {
 	return strings.HasPrefix(pathValue, "/_cluster") ||
 		strings.HasPrefix(pathValue, "/_cat") ||
 		strings.HasPrefix(pathValue, "/_nodes")
+}
+
+func (p *Proxy) setResponseMode(w http.ResponseWriter, mode string) {
+	w.Header().Set(responseModeHeader, mode)
 }
