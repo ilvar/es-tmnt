@@ -183,7 +183,7 @@ func (p *Proxy) rewriteMultiSearchBody(body []byte, pathIndex string) ([]byte, e
 
 		rewrittenBody, err := p.rewriteQueryBody(line, baseIndex)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to rewrite msearch body at NDJSON line %d: %w", i+1, err)
 		}
 		output.Write(rewrittenBody)
 		output.WriteByte('\n')
