@@ -116,6 +116,89 @@ func (p *Proxy) rewriteBulkBody(body []byte, pathIndex string) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
+func (p *Proxy) rewriteMultiSearchBody(body []byte, pathIndex string) ([]byte, error) {
+	lines := bytes.Split(body, []byte("\n"))
+	var output bytes.Buffer
+
+	expectHeader := true
+	var baseIndex string
+
+	for i := 0; i < len(lines); i++ {
+		line := bytes.TrimSpace(lines[i])
+
+		if expectHeader {
+			if len(line) == 0 {
+				// Skip empty lines when looking for the next header.
+				continue
+			}
+
+			var header map[string]interface{}
+			if err := json.Unmarshal(line, &header); err != nil {
+				return nil, fmt.Errorf("invalid msearch header: %w", err)
+			}
+
+			indexName := pathIndex
+			if value, ok := header["index"]; ok {
+				indexValue, ok := value.(string)
+				if !ok {
+					return nil, errors.New("msearch index must be a string")
+				}
+				indexName = indexValue
+			}
+			if indexName == "" {
+				return nil, errors.New("msearch request missing index")
+			}
+
+			var tenantID string
+			var err error
+			baseIndex, tenantID, err = p.parseIndex(indexName)
+			if err != nil {
+				return nil, err
+			}
+			if isSharedMode(p.cfg.Mode) {
+				indexName, err = p.renderAlias(baseIndex, tenantID)
+			} else {
+				indexName, err = p.renderIndex(p.perTenantIdx, baseIndex, tenantID)
+			}
+			if err != nil {
+				return nil, err
+			}
+			header["index"] = indexName
+			encodedHeader, err := json.Marshal(header)
+			if err != nil {
+				return nil, err
+			}
+			output.Write(encodedHeader)
+			output.WriteByte('\n')
+
+			// Next non-empty line must be the body for this header.
+			expectHeader = false
+			continue
+		}
+
+		// Expecting body line corresponding to the last header.
+		if len(line) == 0 {
+			return nil, errors.New("msearch body line empty")
+		}
+
+		rewrittenBody, err := p.rewriteQueryBody(line, baseIndex)
+		if err != nil {
+			return nil, fmt.Errorf("failed to rewrite msearch body at NDJSON line %d: %w", i+1, err)
+		}
+		output.Write(rewrittenBody)
+		output.WriteByte('\n')
+
+		// After a body, the next non-empty line should be a header.
+		expectHeader = true
+	}
+
+	if !expectHeader {
+		// We ended after a header without seeing its body.
+		return nil, errors.New("msearch payload missing body")
+	}
+	return output.Bytes(), nil
+}
+
 func (p *Proxy) bulkIndexName(meta map[string]interface{}, pathIndex string) (string, error) {
 	if value, ok := meta["_index"]; ok {
 		indexName, ok := value.(string)
