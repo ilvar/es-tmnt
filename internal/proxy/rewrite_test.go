@@ -105,17 +105,17 @@ func TestRewriteMappingBodyErrors(t *testing.T) {
 	cfg.Mode = "index-per-tenant"
 	proxyHandler, _ := newProxyWithServer(t, cfg)
 
-	_, err := proxyHandler.rewriteMappingBody([]byte(`{\"mappings\":\"bad\"}`), "orders")
+	_, err := proxyHandler.rewriteMappingBody([]byte(`{"mappings":"bad"}`), "orders")
 	if err == nil || !strings.Contains(err.Error(), "mappings must be an object") {
 		t.Fatalf("expected mappings object error, got %v", err)
 	}
 
-	_, err = proxyHandler.rewriteMappingBody([]byte(`{\"mappings\":{\"properties\":\"bad\"}}`), "orders")
+	_, err = proxyHandler.rewriteMappingBody([]byte(`{"mappings":{"properties":"bad"}}`), "orders")
 	if err == nil || !strings.Contains(err.Error(), "mappings.properties must be an object") {
 		t.Fatalf("expected mappings.properties error, got %v", err)
 	}
 
-	_, err = proxyHandler.rewriteMappingBody([]byte(`{\"properties\":\"bad\"}`), "orders")
+	_, err = proxyHandler.rewriteMappingBody([]byte(`{"properties":"bad"}`), "orders")
 	if err == nil || !strings.Contains(err.Error(), "properties must be an object") {
 		t.Fatalf("expected properties object error, got %v", err)
 	}
