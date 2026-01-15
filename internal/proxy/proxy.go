@@ -182,8 +182,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.setResponseMode(w, responseModeHandled)
 	switch segments[1] {
 	case "_search":
-		if len(segments) == 3 && segments[2] == "template" {
-			p.handleSearchTemplate(w, r, index)
+		if len(segments) >= 3 && segments[2] == "template" {
+			if len(segments) == 3 {
+				p.handleSearchTemplate(w, r, index)
+			} else {
+				p.reject(w, "unsupported endpoint")
+			}
 			return
 		}
 		p.handleSearch(w, r, index)
