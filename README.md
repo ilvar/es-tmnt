@@ -142,4 +142,6 @@ Run the integration tests alongside Elasticsearch via Docker Compose:
 ```
 
 The script runs both shared-index and index-per-tenant modes with configuration from
-`config/shared.env` and `config/per-tenant.env`.
+`config/shared.env` and `config/per-tenant.env`. Coverage summaries are printed for
+each mode and profiles are written to `coverage/integration-shared.out` and
+`coverage/integration-per-tenant.out`.
