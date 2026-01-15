@@ -100,8 +100,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		case "_search":
 			if len(segments) == 2 && segments[1] == "template" {
-				p.setResponseMode(w, responseModePassthrough)
-				p.proxy.ServeHTTP(w, r)
+				p.setResponseMode(w, responseModeHandled)
+				p.handleSearchTemplate(w, r, "")
 				return
 			}
 			if len(segments) == 1 {
