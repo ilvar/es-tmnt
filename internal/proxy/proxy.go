@@ -280,7 +280,7 @@ func (p *Proxy) handleSearch(w http.ResponseWriter, r *http.Request, index strin
 }
 
 func (p *Proxy) handleSearchTemplate(w http.ResponseWriter, r *http.Request, index string) {
-	baseIndex, tenantID, err := p.parseIndex(index)
+	baseIndex, tenantID, err := p.resolveIndex(index, r)
 	if err != nil {
 		p.reject(w, err.Error())
 		return
