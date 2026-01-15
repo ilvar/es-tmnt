@@ -93,6 +93,11 @@ func (p *Proxy) rewriteBulkBody(body []byte, pathIndex string) ([]byte, error) {
 				i++
 				sourceLine := bytes.TrimSpace(lines[i])
 				if len(sourceLine) == 0 {
+					// If total lines is 2 (action + one empty line from trailing newline), it's missing source
+					// If total lines is 3+ (action + empty source + more), it's empty source line
+					if len(lines) <= 2 {
+						return nil, errors.New("bulk payload missing source")
+					}
 					return nil, errors.New("bulk source line empty")
 				}
 				if op == "update" {
@@ -178,6 +183,11 @@ func (p *Proxy) rewriteMultiSearchBody(body []byte, pathIndex string) ([]byte, e
 
 		// Expecting body line corresponding to the last header.
 		if len(line) == 0 {
+			// If total lines is 2 (header + one empty line from trailing newline), it's missing body
+			// If total lines is 3+ (header + empty body + more), it's empty body line
+			if len(lines) <= 2 {
+				return nil, errors.New("msearch payload missing body")
+			}
 			return nil, errors.New("msearch body line empty")
 		}
 
