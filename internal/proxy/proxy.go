@@ -121,6 +121,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			p.setResponseMode(w, responseModeHandled)
 			p.reject(w, "unsupported system endpoint")
 			return
+		case "_validate":
+			if len(segments) == 2 && segments[1] == "query" {
+				p.setResponseMode(w, responseModeHandled)
+				p.handleValidateQuery(w, r, "")
+				return
+			}
+			p.setResponseMode(w, responseModeHandled)
+			p.reject(w, "unsupported system endpoint")
+			return
 		case "_msearch":
 			if len(segments) == 2 && segments[1] == "template" {
 				p.setResponseMode(w, responseModePassthrough)
@@ -145,6 +154,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			p.reject(w, "unsupported system endpoint")
 			return
 		case "_explain":
+			if len(segments) == 1 {
+				p.setResponseMode(w, responseModeHandled)
+				p.handleExplain(w, r, "")
+				return
+			}
 			p.setResponseMode(w, responseModeHandled)
 			p.reject(w, "unsupported system endpoint")
 			return
@@ -249,7 +263,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if segments[1] == "_validate" && len(segments) > 2 && segments[2] == "query" {
-			p.reject(w, "unsupported endpoint")
+			p.handleValidateQuery(w, r, index)
 			return
 		}
 		if segments[1] == "_search_shards" || segments[1] == "_field_caps" {
@@ -476,6 +490,36 @@ func (p *Proxy) handleExplain(w http.ResponseWriter, r *http.Request, index stri
 			p.reject(w, err.Error())
 			return
 		}
+	}
+	if err := p.rewriteQueryRequest(r, baseIndex); err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	p.applyIndexRewrite(r, index, targetIndex)
+	p.proxy.ServeHTTP(w, r)
+}
+
+func (p *Proxy) handleValidateQuery(w http.ResponseWriter, r *http.Request, index string) {
+	if index == "" {
+		indexValue, err := p.indexFromQuery(r, "index")
+		if err != nil {
+			p.reject(w, err.Error())
+			return
+		}
+		if indexValue == "" {
+			p.proxy.ServeHTTP(w, r)
+			return
+		}
+	}
+	baseIndex, tenantID, err := p.resolveIndex(index, r)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	targetIndex, err := p.renderQueryIndex(baseIndex, tenantID)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
 	}
 	if err := p.rewriteQueryRequest(r, baseIndex); err != nil {
 		p.reject(w, err.Error())
