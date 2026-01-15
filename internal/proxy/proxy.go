@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -58,7 +59,7 @@ func New(cfg config.Config) (*Proxy, error) {
 		return nil, err
 	}
 	reverseProxy := httputil.NewSingleHostReverseProxy(parsed)
-	return &Proxy{
+	proxy := &Proxy{
 		cfg:          cfg,
 		proxy:        reverseProxy,
 		aliasTmpl:    aliasTmpl,
@@ -69,7 +70,9 @@ func New(cfg config.Config) (*Proxy, error) {
 		prefixGroup:  prefixGroup,
 		postfixGroup: postfixGroup,
 		passthroughs: cfg.PassthroughPaths,
-	}, nil
+	}
+	reverseProxy.ModifyResponse = proxy.modifyResponse
+	return proxy, nil
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -90,9 +93,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			p.handleBulk(w, r, "")
 			return
 		}
-		if segments[0] == "_cat" && len(segments) > 1 && segments[1] == "indices" {
+		if p.isCatIndices(r.URL.Path) {
 			p.setResponseMode(w, responseModeHandled)
-			p.handleCatIndices(w, r)
+			p.proxy.ServeHTTP(w, r)
 			return
 		}
 		if p.isSystemPassthrough(r.URL.Path) {
@@ -166,41 +169,6 @@ func (p *Proxy) handleSearch(w http.ResponseWriter, r *http.Request, index strin
 		r.ContentLength = int64(len(rewritten))
 	}
 	p.rewriteIndexPath(r, index, aliasIndex)
-	p.proxy.ServeHTTP(w, r)
-}
-
-func (p *Proxy) handleCatIndices(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		p.reject(w, "unsupported method for cat indices")
-		return
-	}
-	segments := splitPath(r.URL.Path)
-	if len(segments) != 3 || segments[2] == "" {
-		p.reject(w, "missing index")
-		return
-	}
-	indexValues := strings.Split(segments[2], ",")
-	targets := make([]string, 0, len(indexValues))
-	for _, index := range indexValues {
-		if index == "" {
-			p.reject(w, "invalid index")
-			return
-		}
-		baseIndex, tenantID, err := p.parseIndex(index)
-		if err != nil {
-			p.reject(w, err.Error())
-			return
-		}
-		targetIndex, err := p.renderTargetIndex(baseIndex, tenantID)
-		if err != nil {
-			p.reject(w, err.Error())
-			return
-		}
-		targets = append(targets, targetIndex)
-	}
-	segments[2] = strings.Join(targets, ",")
-	r.URL.Path = "/" + path.Join(segments...)
-	r.RequestURI = r.URL.Path
 	p.proxy.ServeHTTP(w, r)
 }
 
@@ -562,4 +530,118 @@ func (p *Proxy) isSystemPassthrough(pathValue string) bool {
 
 func (p *Proxy) setResponseMode(w http.ResponseWriter, mode string) {
 	w.Header().Set(responseModeHeader, mode)
+}
+
+func (p *Proxy) isCatIndices(pathValue string) bool {
+	segments := splitPath(pathValue)
+	return len(segments) == 2 && segments[0] == "_cat" && segments[1] == "indices"
+}
+
+func (p *Proxy) modifyResponse(resp *http.Response) error {
+	if resp == nil || resp.Request == nil {
+		return nil
+	}
+	if !p.isCatIndices(resp.Request.URL.Path) || resp.Request.Method != http.MethodGet {
+		return nil
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	if len(body) == 0 {
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		return nil
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if strings.Contains(contentType, "application/json") {
+		rewritten, err := p.addTenantToCatIndicesJSON(body)
+		if err != nil {
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+			return nil
+		}
+		p.replaceResponseBody(resp, rewritten)
+		return nil
+	}
+	rewritten := p.addTenantToCatIndicesText(body)
+	p.replaceResponseBody(resp, rewritten)
+	return nil
+}
+
+func (p *Proxy) addTenantToCatIndicesJSON(body []byte) ([]byte, error) {
+	var payload []map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	for _, item := range payload {
+		indexValue, ok := item["index"].(string)
+		if !ok {
+			continue
+		}
+		if tenantID, ok := p.tenantIDForIndex(indexValue); ok {
+			item["tenant_id"] = tenantID
+		}
+	}
+	return json.Marshal(payload)
+}
+
+func (p *Proxy) addTenantToCatIndicesText(body []byte) []byte {
+	text := string(body)
+	trailingNewline := strings.HasSuffix(text, "\n")
+	trimmed := strings.TrimRight(text, "\n")
+	if trimmed == "" {
+		return body
+	}
+	lines := strings.Split(trimmed, "\n")
+	headerAdded := false
+	for idx, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if !headerAdded && strings.Contains(line, "index") && strings.Contains(line, "health") {
+			lines[idx] = line + " TENANT_ID"
+			headerAdded = true
+			continue
+		}
+		indexValue := fields[len(fields)-1]
+		tenantID, ok := p.tenantIDForIndex(indexValue)
+		if ok {
+			lines[idx] = line + " " + tenantID
+			if !headerAdded {
+				headerAdded = true
+			}
+		} else if headerAdded {
+			lines[idx] = line + " -"
+		}
+	}
+	rewritten := strings.Join(lines, "\n")
+	if trailingNewline {
+		rewritten += "\n"
+	}
+	return []byte(rewritten)
+}
+
+func (p *Proxy) tenantIDForIndex(index string) (string, bool) {
+	matches := p.cfg.TenantRegex.Compiled.FindStringSubmatch(index)
+	if matches == nil {
+		return "", false
+	}
+	if p.tenantGroup >= len(matches) {
+		return "", false
+	}
+	tenantID := matches[p.tenantGroup]
+	if tenantID == "" {
+		return "", false
+	}
+	return tenantID, true
+}
+
+func (p *Proxy) replaceResponseBody(resp *http.Response, body []byte) {
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.ContentLength = int64(len(body))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
 }

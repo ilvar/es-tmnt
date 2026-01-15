@@ -17,7 +17,7 @@ list return a 4xx error unless they are explicitly configured as passthrough pat
 | `/_bulk` | `POST` | Root bulk endpoint is supported with the same rewrite behavior. |
 | `/{index}` | `PUT`, `DELETE` | Index create/delete requests target the shared or per-tenant index, and creation bodies can rewrite mappings. |
 | `/{index}/_mapping` | `PUT`, `POST` | Mapping updates are rewritten in index-per-tenant mode to nest field mappings under the base index name. |
-| `/_cat/indices/{index}` | `GET` | Cat indices requests are rewritten to the shared or per-tenant index targets. |
+| `/_cat/indices` | `GET` | Cat indices responses include `TENANT_ID` for indices matching the tenant regex. |
 
 All other `/_*` system endpoints (outside the cluster passthrough list), index endpoints,
 and unsupported methods return a 400 error unless configured as passthrough paths.
@@ -45,7 +45,7 @@ Configured passthrough paths bypass all proxy logic and are forwarded directly t
 Elasticsearch. A trailing `*` in the configuration acts as a prefix match.
 
 Cluster-level system APIs are also forwarded by default, including `/_cluster/*`,
-`/_cat/*` (except `/_cat/indices/{index}`), and `/_nodes/*`.
+`/_cat/*` (except `/_cat/indices`), and `/_nodes/*`.
 
 ## Development
 
