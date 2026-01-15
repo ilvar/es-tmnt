@@ -284,6 +284,80 @@ func TestClusterPassthrough(t *testing.T) {
 	}
 }
 
+func TestSnapshotPassthrough(t *testing.T) {
+	cfg := config.Default()
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/_snapshot/test-repo", nil)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, _, _, count := capture.snapshot()
+	if count != 1 {
+		t.Fatalf("expected upstream call, got %d", count)
+	}
+	if path != "/_snapshot/test-repo" {
+		t.Fatalf("expected path /_snapshot/test-repo, got %q", path)
+	}
+}
+
+func TestTransformIndexRewrite(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "shared"
+	cfg.SharedIndex.Name = "shared-{{.index}}"
+	cfg.SharedIndex.AliasTemplate = "alias-{{.index}}-{{.tenant}}"
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	body := []byte(`{"source":{"index":"orders-tenant1"},"dest":{"index":"stats-tenant1"}}`)
+	req := httptest.NewRequest(http.MethodPut, "/_transform/orders", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	_, capturedBody, _, _ := capture.snapshot()
+	var payload map[string]interface{}
+	if err := json.Unmarshal(capturedBody, &payload); err != nil {
+		t.Fatalf("parse body: %v", err)
+	}
+	source := payload["source"].(map[string]interface{})
+	if source["index"] != "alias-orders-tenant1" {
+		t.Fatalf("expected source index alias-orders-tenant1, got %v", source["index"])
+	}
+	dest := payload["dest"].(map[string]interface{})
+	if dest["index"] != "shared-stats" {
+		t.Fatalf("expected dest index shared-stats, got %v", dest["index"])
+	}
+}
+
+func TestRollupIndexPatternRewrite(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "shared"
+	cfg.SharedIndex.AliasTemplate = "alias-{{.index}}-{{.tenant}}"
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	body := []byte(`{"index_pattern":"logs-tenant1-*","rollup_index":"rollup-tenant1"}`)
+	req := httptest.NewRequest(http.MethodPut, "/_rollup/job/logs", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	_, capturedBody, _, _ := capture.snapshot()
+	var payload map[string]interface{}
+	if err := json.Unmarshal(capturedBody, &payload); err != nil {
+		t.Fatalf("parse body: %v", err)
+	}
+	if payload["index_pattern"] != "alias-logs-*-tenant1" {
+		t.Fatalf("expected index_pattern alias-logs-*-tenant1, got %v", payload["index_pattern"])
+	}
+}
+
 func TestUnsupportedRequestReturnsError(t *testing.T) {
 	cfg := config.Default()
 	cfg.Mode = "shared"
