@@ -315,6 +315,46 @@ func TestSnapshotPassthrough(t *testing.T) {
 	}
 }
 
+func TestQueryRulesPassthrough(t *testing.T) {
+	cfg := config.Default()
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/_query_rules/my-set", nil)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, _, _, _, count := capture.snapshot()
+	if count != 1 {
+		t.Fatalf("expected upstream call, got %d", count)
+	}
+	if path != "/_query_rules/my-set" {
+		t.Fatalf("expected path /_query_rules/my-set, got %q", path)
+	}
+}
+
+func TestSynonymsPassthrough(t *testing.T) {
+	cfg := config.Default()
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/_synonyms/my-set", nil)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, _, _, _, count := capture.snapshot()
+	if count != 1 {
+		t.Fatalf("expected upstream call, got %d", count)
+	}
+	if path != "/_synonyms/my-set" {
+		t.Fatalf("expected path /_synonyms/my-set, got %q", path)
+	}
+}
+
 func TestSearchRootRewrite(t *testing.T) {
 	cfg := config.Default()
 	cfg.Mode = "index-per-tenant"
@@ -496,6 +536,32 @@ func TestSourceRequestRewritesToSearch(t *testing.T) {
 	ids := query["ids"].(map[string]interface{})["values"].([]interface{})
 	if ids[0].(string) != "1" {
 		t.Fatalf("expected id 1, got %v", ids)
+	}
+}
+
+func TestSourceRootRewritesToSearch(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "shared"
+	cfg.SharedIndex.AliasTemplate = "alias-{{.index}}-{{.tenant}}"
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	body := []byte(`{"query":{"match":{"name":"lamp"}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/products-tenant1/_source/", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, _, capturedBody, method, _ := capture.snapshot()
+	if method != http.MethodPost {
+		t.Fatalf("expected method POST, got %s", method)
+	}
+	if path != "/alias-products-tenant1/_search" {
+		t.Fatalf("expected path /alias-products-tenant1/_search, got %q", path)
+	}
+	if string(capturedBody) != string(body) {
+		t.Fatalf("expected body %s, got %s", string(body), string(capturedBody))
 	}
 }
 
