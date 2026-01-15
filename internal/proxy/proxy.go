@@ -81,12 +81,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			p.handleBulk(w, r, "")
 			return
 		}
+		if p.isSystemPassthrough(r.URL.Path) {
+			p.proxy.ServeHTTP(w, r)
+			return
+		}
 		p.reject(w, "unsupported system endpoint")
 		return
 	}
 	index := segments[0]
 	if len(segments) == 1 {
-		p.reject(w, "unsupported index endpoint")
+		p.handleIndexRoot(w, r, index)
 		return
 	}
 	switch segments[1] {
@@ -102,6 +106,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.handleUpdate(w, r, index)
 	case "_bulk":
 		p.handleBulk(w, r, index)
+	case "_mapping":
+		p.handleMapping(w, r, index)
 	default:
 		p.reject(w, "unsupported endpoint")
 	}
@@ -275,6 +281,98 @@ func (p *Proxy) handleBulk(w http.ResponseWriter, r *http.Request, index string)
 	p.proxy.ServeHTTP(w, r)
 }
 
+func (p *Proxy) handleIndexRoot(w http.ResponseWriter, r *http.Request, index string) {
+	switch r.Method {
+	case http.MethodPut:
+		p.handleIndexCreate(w, r, index)
+	case http.MethodDelete:
+		p.handleIndexDelete(w, r, index)
+	default:
+		p.reject(w, "unsupported index endpoint")
+	}
+}
+
+func (p *Proxy) handleIndexCreate(w http.ResponseWriter, r *http.Request, index string) {
+	baseIndex, tenantID, err := p.parseIndex(index)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	if r.Body != nil {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			p.reject(w, "failed to read body")
+			return
+		}
+		if len(bytes.TrimSpace(body)) != 0 {
+			rewritten, err := p.rewriteMappingBody(body, baseIndex)
+			if err != nil {
+				p.reject(w, err.Error())
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(rewritten))
+			r.ContentLength = int64(len(rewritten))
+		}
+	}
+	targetIndex, err := p.renderTargetIndex(baseIndex, tenantID)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	p.rewriteIndexPath(r, index, targetIndex)
+	p.proxy.ServeHTTP(w, r)
+}
+
+func (p *Proxy) handleIndexDelete(w http.ResponseWriter, r *http.Request, index string) {
+	baseIndex, tenantID, err := p.parseIndex(index)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	targetIndex, err := p.renderTargetIndex(baseIndex, tenantID)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	p.rewriteIndexPath(r, index, targetIndex)
+	p.proxy.ServeHTTP(w, r)
+}
+
+func (p *Proxy) handleMapping(w http.ResponseWriter, r *http.Request, index string) {
+	if r.Method != http.MethodPut && r.Method != http.MethodPost {
+		p.reject(w, "unsupported method for _mapping")
+		return
+	}
+	baseIndex, tenantID, err := p.parseIndex(index)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	if r.Body == nil {
+		p.reject(w, "missing body")
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		p.reject(w, "failed to read body")
+		return
+	}
+	rewritten, err := p.rewriteMappingBody(body, baseIndex)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(rewritten))
+	r.ContentLength = int64(len(rewritten))
+	targetIndex, err := p.renderTargetIndex(baseIndex, tenantID)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	p.rewriteIndexPath(r, index, targetIndex)
+	p.proxy.ServeHTTP(w, r)
+}
+
 func (p *Proxy) rewriteIndexPath(r *http.Request, original, replacement string) {
 	segments := splitPath(r.URL.Path)
 	if len(segments) == 0 {
@@ -394,4 +492,17 @@ func groupIndexes(regex *regexp.Regexp) (int, int, int, int, error) {
 
 func isSharedMode(mode string) bool {
 	return strings.EqualFold(mode, "shared")
+}
+
+func (p *Proxy) renderTargetIndex(baseIndex, tenantID string) (string, error) {
+	if isSharedMode(p.cfg.Mode) {
+		return p.renderIndex(p.sharedIndex, baseIndex, tenantID)
+	}
+	return p.renderIndex(p.perTenantIdx, baseIndex, tenantID)
+}
+
+func (p *Proxy) isSystemPassthrough(pathValue string) bool {
+	return strings.HasPrefix(pathValue, "/_cluster") ||
+		strings.HasPrefix(pathValue, "/_cat") ||
+		strings.HasPrefix(pathValue, "/_nodes")
 }

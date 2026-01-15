@@ -142,6 +142,39 @@ func (p *Proxy) rewriteQueryBody(body []byte, baseIndex string) ([]byte, error) 
 	return json.Marshal(rewritten)
 }
 
+func (p *Proxy) rewriteMappingBody(body []byte, baseIndex string) ([]byte, error) {
+	if isSharedMode(p.cfg.Mode) {
+		return body, nil
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("invalid JSON body: %w", err)
+	}
+	if mappingsValue, ok := payload["mappings"]; ok {
+		mappings, ok := mappingsValue.(map[string]interface{})
+		if !ok {
+			return nil, errors.New("mappings must be an object")
+		}
+		if propsValue, ok := mappings["properties"]; ok {
+			props, ok := propsValue.(map[string]interface{})
+			if !ok {
+				return nil, errors.New("mappings.properties must be an object")
+			}
+			mappings["properties"] = wrapProperties(props, baseIndex)
+			payload["mappings"] = mappings
+		}
+		return json.Marshal(payload)
+	}
+	if propsValue, ok := payload["properties"]; ok {
+		props, ok := propsValue.(map[string]interface{})
+		if !ok {
+			return nil, errors.New("properties must be an object")
+		}
+		payload["properties"] = wrapProperties(props, baseIndex)
+	}
+	return json.Marshal(payload)
+}
+
 func rewriteQueryValue(value interface{}, baseIndex string) interface{} {
 	switch typed := value.(type) {
 	case map[string]interface{}:
@@ -260,4 +293,19 @@ func prefixField(baseIndex, field string) string {
 		return field
 	}
 	return baseIndex + "." + field
+}
+
+func wrapProperties(props map[string]interface{}, baseIndex string) map[string]interface{} {
+	if existing, ok := props[baseIndex]; ok {
+		if inner, ok := existing.(map[string]interface{}); ok {
+			if _, ok := inner["properties"]; ok {
+				return props
+			}
+		}
+	}
+	return map[string]interface{}{
+		baseIndex: map[string]interface{}{
+			"properties": props,
+		},
+	}
 }
