@@ -116,6 +116,66 @@ func (p *Proxy) rewriteBulkBody(body []byte, pathIndex string) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
+func (p *Proxy) rewriteMultiSearchBody(body []byte, pathIndex string) ([]byte, error) {
+	lines := bytes.Split(body, []byte("\n"))
+	var output bytes.Buffer
+	for i := 0; i < len(lines); i++ {
+		headerLine := bytes.TrimSpace(lines[i])
+		if len(headerLine) == 0 {
+			continue
+		}
+		var header map[string]interface{}
+		if err := json.Unmarshal(headerLine, &header); err != nil {
+			return nil, fmt.Errorf("invalid msearch header: %w", err)
+		}
+		indexName := pathIndex
+		if value, ok := header["index"]; ok {
+			indexValue, ok := value.(string)
+			if !ok {
+				return nil, errors.New("msearch index must be a string")
+			}
+			indexName = indexValue
+		}
+		if indexName == "" {
+			return nil, errors.New("msearch request missing index")
+		}
+		baseIndex, tenantID, err := p.parseIndex(indexName)
+		if err != nil {
+			return nil, err
+		}
+		if isSharedMode(p.cfg.Mode) {
+			indexName, err = p.renderAlias(baseIndex, tenantID)
+		} else {
+			indexName, err = p.renderIndex(p.perTenantIdx, baseIndex, tenantID)
+		}
+		if err != nil {
+			return nil, err
+		}
+		header["index"] = indexName
+		encodedHeader, err := json.Marshal(header)
+		if err != nil {
+			return nil, err
+		}
+		output.Write(encodedHeader)
+		output.WriteByte('\n')
+		if i+1 >= len(lines) {
+			return nil, errors.New("msearch payload missing body")
+		}
+		i++
+		bodyLine := bytes.TrimSpace(lines[i])
+		if len(bodyLine) == 0 {
+			return nil, errors.New("msearch body line empty")
+		}
+		rewrittenBody, err := p.rewriteQueryBody(bodyLine, baseIndex)
+		if err != nil {
+			return nil, err
+		}
+		output.Write(rewrittenBody)
+		output.WriteByte('\n')
+	}
+	return output.Bytes(), nil
+}
+
 func (p *Proxy) bulkIndexName(meta map[string]interface{}, pathIndex string) (string, error) {
 	if value, ok := meta["_index"]; ok {
 		indexName, ok := value.(string)

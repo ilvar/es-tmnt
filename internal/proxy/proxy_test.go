@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 type capturedRequest struct {
 	mu     sync.Mutex
 	path   string
+	query  string
 	body   []byte
 	method string
 	count  int
@@ -28,16 +30,25 @@ func (c *capturedRequest) handler(w http.ResponseWriter, r *http.Request) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.path = r.URL.Path
+	c.query = r.URL.RawQuery
 	c.body = body
 	c.method = r.Method
 	c.count++
 	w.WriteHeader(http.StatusOK)
 }
 
-func (c *capturedRequest) snapshot() (path string, body []byte, method string, count int) {
+func (c *capturedRequest) snapshot() (path string, query string, body []byte, method string, count int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.path, c.body, c.method, c.count
+	return c.path, c.query, c.body, c.method, c.count
+}
+
+func queryValue(rawQuery, key string) string {
+	parsed, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return ""
+	}
+	return parsed.Get(key)
 }
 
 func newProxyWithServer(t *testing.T, cfg config.Config) (*Proxy, *capturedRequest) {
@@ -77,7 +88,7 @@ func TestSharedIndexSearchRewrite(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	path, capturedBody, _, _ := capture.snapshot()
+	path, _, capturedBody, _, _ := capture.snapshot()
 	if path != "/alias-products-tenant1/_search" {
 		t.Fatalf("expected path /alias-products-tenant1/_search, got %q", path)
 	}
@@ -101,7 +112,7 @@ func TestSharedIndexIndexingRewrite(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	path, capturedBody, _, _ := capture.snapshot()
+	path, _, capturedBody, _, _ := capture.snapshot()
 	if path != "/shared-index/_doc/1" {
 		t.Fatalf("expected path /shared-index/_doc/1, got %q", path)
 	}
@@ -128,7 +139,7 @@ func TestIndexPerTenantSearchRewrite(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	path, capturedBody, _, _ := capture.snapshot()
+	path, _, capturedBody, _, _ := capture.snapshot()
 	if path != "/shared-index/_search" {
 		t.Fatalf("expected path /shared-index/_search, got %q", path)
 	}
@@ -136,8 +147,8 @@ func TestIndexPerTenantSearchRewrite(t *testing.T) {
 	if err := json.Unmarshal(capturedBody, &payload); err != nil {
 		t.Fatalf("parse body: %v", err)
 	}
-	query := payload["query"].(map[string]interface{})
-	match := query["match"].(map[string]interface{})
+	searchQuery := payload["query"].(map[string]interface{})
+	match := searchQuery["match"].(map[string]interface{})
 	if _, ok := match["orders.field1"]; !ok {
 		t.Fatalf("expected field orders.field1 in match, got %v", match)
 	}
@@ -165,7 +176,7 @@ func TestIndexPerTenantBulkRewrite(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	_, capturedBody, _, _ := capture.snapshot()
+	_, _, capturedBody, _, _ := capture.snapshot()
 	lines := strings.Split(strings.TrimSpace(string(capturedBody)), "\n")
 	if len(lines) < 2 {
 		t.Fatalf("expected bulk payload lines, got %v", lines)
@@ -201,7 +212,7 @@ func TestSharedIndexCreateRewrite(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	path, capturedBody, method, _ := capture.snapshot()
+	path, _, capturedBody, method, _ := capture.snapshot()
 	if method != http.MethodPut {
 		t.Fatalf("expected method PUT, got %s", method)
 	}
@@ -227,7 +238,7 @@ func TestIndexPerTenantMappingRewrite(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	path, capturedBody, _, _ := capture.snapshot()
+	path, _, capturedBody, _, _ := capture.snapshot()
 	if path != "/orders-tenant2/_mapping" {
 		t.Fatalf("expected path /orders-tenant2/_mapping, got %q", path)
 	}
@@ -255,7 +266,7 @@ func TestIndexPerTenantDeleteRewrite(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	path, _, method, _ := capture.snapshot()
+	path, _, _, method, _ := capture.snapshot()
 	if method != http.MethodDelete {
 		t.Fatalf("expected method DELETE, got %s", method)
 	}
@@ -275,12 +286,107 @@ func TestClusterPassthrough(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
-	path, _, _, count := capture.snapshot()
+	path, _, _, _, count := capture.snapshot()
 	if count != 1 {
 		t.Fatalf("expected upstream call, got %d", count)
 	}
 	if path != "/_cluster/health" {
 		t.Fatalf("expected path /_cluster/health, got %q", path)
+	}
+}
+
+func TestSearchRootRewrite(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "index-per-tenant"
+	cfg.IndexPerTenant.IndexTemplate = "shared-index"
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	body := []byte(`{"query":{"match":{"field1":"value"}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/_search?index=orders-tenant2", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, query, capturedBody, _, _ := capture.snapshot()
+	if path != "/_search" {
+		t.Fatalf("expected path /_search, got %q", path)
+	}
+	if got := queryValue(query, "index"); got != "shared-index" {
+		t.Fatalf("expected index shared-index, got %q", got)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(capturedBody, &payload); err != nil {
+		t.Fatalf("parse body: %v", err)
+	}
+	searchQuery := payload["query"].(map[string]interface{})
+	match := searchQuery["match"].(map[string]interface{})
+	if _, ok := match["orders.field1"]; !ok {
+		t.Fatalf("expected field orders.field1 in match, got %v", match)
+	}
+}
+
+func TestAnalyzeIndexRewrite(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "shared"
+	cfg.SharedIndex.Name = "shared-index"
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/_analyze?index=orders-tenant2", nil)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, query, _, _, _ := capture.snapshot()
+	if path != "/_analyze" {
+		t.Fatalf("expected path /_analyze, got %q", path)
+	}
+	if got := queryValue(query, "index"); got != "shared-index" {
+		t.Fatalf("expected index shared-index, got %q", got)
+	}
+}
+
+func TestMultiSearchRewrite(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "index-per-tenant"
+	cfg.IndexPerTenant.IndexTemplate = "shared-index"
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	body := strings.Join([]string{
+		`{"index":"orders-tenant2"}`,
+		`{"query":{"match":{"field1":"value"}}}`,
+		"",
+	}, "\n")
+	req := httptest.NewRequest(http.MethodPost, "/_msearch", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	_, _, capturedBody, _, _ := capture.snapshot()
+	lines := strings.Split(strings.TrimSpace(string(capturedBody)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected msearch payload lines, got %v", lines)
+	}
+	var header map[string]interface{}
+	if err := json.Unmarshal([]byte(lines[0]), &header); err != nil {
+		t.Fatalf("parse header: %v", err)
+	}
+	if header["index"] != "shared-index" {
+		t.Fatalf("expected header index shared-index, got %v", header["index"])
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(lines[1]), &payload); err != nil {
+		t.Fatalf("parse body: %v", err)
+	}
+	query := payload["query"].(map[string]interface{})
+	match := query["match"].(map[string]interface{})
+	if _, ok := match["orders.field1"]; !ok {
+		t.Fatalf("expected field orders.field1 in match, got %v", match)
 	}
 }
 
@@ -296,7 +402,7 @@ func TestUnsupportedRequestReturnsError(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", rec.Code)
 	}
-	_, _, _, count := capture.snapshot()
+	_, _, _, _, count := capture.snapshot()
 	if count != 0 {
 		t.Fatalf("expected no upstream calls, got %d", count)
 	}
