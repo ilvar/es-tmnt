@@ -123,8 +123,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		case "_msearch":
 			if len(segments) == 2 && segments[1] == "template" {
-				p.setResponseMode(w, responseModeHandled)
-				p.handleMultiSearch(w, r, "")
+				p.setResponseMode(w, responseModePassthrough)
+				p.proxy.ServeHTTP(w, r)
 				return
 			}
 			if len(segments) == 1 {
