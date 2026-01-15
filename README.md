@@ -1,12 +1,45 @@
 # es-tmnt
 Multi-tenancy for Elasticsearch
 
-## Supported endpoints and behavior
+## Tenant extraction and rewrite behavior
+
+- The tenant identifier is extracted from the index name using a configurable regex that
+  must include named groups `prefix`, `tenant`, and `postfix`. The base index name is
+  derived from the `index` group when present, or from `prefix + postfix` otherwise.
+  - Example: with pattern `^(?P<prefix>[^-]+)-(?P<tenant>[^-]+)(?P<postfix>.*)$`,
+    `logs-acme-prod` yields tenant `acme` and base index `logs-prod`.
+- **Shared-index mode**:
+  - Search requests are routed to a tenant alias rendered from the alias template.
+  - Indexing and update bodies inject the tenant field (configured via `tenant_field`).
+  - Example: base index `logs`, tenant `acme`, alias template `alias-{{.index}}-{{.tenant}}`
+    routes searches to `alias-logs-acme`.
+- **Index-per-tenant mode**:
+  - Requests are routed to a per-tenant index rendered from the index template.
+  - Query bodies rewrite field paths (including `match`, `term`, `range`, `sort`,
+    `_source`, and `fields`) by prefixing with the base index name.
+  - Document and update bodies are nested under the base index name.
+  - Example: base index `logs`, tenant `acme`, index template `{{.index}}-{{.tenant}}`
+    rewrites the target index to `logs-acme`.
+  - Example: `{"match":{"status":"ok"}}` becomes `{"match":{"logs.status":"ok"}}`.
+  - Example: document `{ "status": "ok" }` becomes `{ "logs": { "status": "ok" } }`.
+- **Bulk requests**:
+  - Each action line rewrites `_index` to the shared or per-tenant index.
+  - Source/update lines are rewritten using the same document and update rules above.
+
+### Passthrough paths
+
+Configured passthrough paths bypass all proxy logic and are forwarded directly to
+Elasticsearch. A trailing `*` in the configuration acts as a prefix match.
+
+Cluster-level system APIs are forwarded by default (except `/_cat/indices`, which is
+rewritten).
+
+### Supported endpoints and behavior
 
 The proxy only supports a small set of Elasticsearch endpoints. Requests outside this
 list return a 4xx error unless they are explicitly configured as passthrough paths.
 
-### Endpoint groups
+#### Endpoint groups
 
 | Endpoint | Methods | Notes |
 | --- | --- | --- |
@@ -44,42 +77,7 @@ list return a 4xx error unless they are explicitly configured as passthrough pat
 All other `/_*` system endpoints (outside the cluster passthrough list), index endpoints,
 and unsupported methods return a 400 error unless configured as passthrough paths.
 
-### Tenant extraction and rewrite behavior
-
-- The tenant identifier is extracted from the index name using a configurable regex that
-  must include named groups `prefix`, `tenant`, and `postfix`. The base index name is
-  derived from the `index` group when present, or from `prefix + postfix` otherwise.
-- **Shared-index mode**:
-  - Search requests are routed to a tenant alias rendered from the alias template.
-  - Indexing and update bodies inject the tenant field (configured via `tenant_field`).
-- **Index-per-tenant mode**:
-  - Requests are routed to a per-tenant index rendered from the index template.
-  - Query bodies rewrite field paths (including `match`, `term`, `range`, `sort`,
-    `_source`, and `fields`) by prefixing with the base index name.
-  - Document and update bodies are nested under the base index name.
-- **Bulk requests**:
-  - Each action line rewrites `_index` to the shared or per-tenant index.
-  - Source/update lines are rewritten using the same document and update rules above.
-
-### Passthrough paths
-
-Configured passthrough paths bypass all proxy logic and are forwarded directly to
-Elasticsearch. A trailing `*` in the configuration acts as a prefix match.
-
-Cluster-level system APIs are also forwarded by default, grouped as follows:
-
-- Cluster and cat APIs: `/_cluster/*`, `/_cat/*` (except `/_cat/indices`), `/_nodes/*`
-- Snapshot and storage APIs: `/_snapshot/*`, `/_searchable_snapshots/*`
-- Alias and template APIs: `/_alias/*`, `/_aliases`, `/_template/*`,
-  `/_index_template/*`, `/_component_template/*`
-- Data stream and resolve APIs: `/_resolve/*`, `/_data_stream/*`, `/_dangling/*`
-- Lifecycle and task APIs: `/_slm/*`, `/_ilm/*`, `/_tasks/*`, `/_scripts/*`
-- Autoscaling and migration APIs: `/_autoscaling/*`, `/_migration/*`, `/_features/*`
-- Security and licensing APIs: `/_security/*`, `/_license/*`
-- ML, watcher, graph, and CCR APIs: `/_ml/*`, `/_watcher/*`, `/_graph/*`, `/_ccr/*`
-
-
-### TODO: Unhandled Elasticsearch REST endpoints
+### Unhandled Elasticsearch REST endpoints
 
 The proxy does not currently modify or explicitly pass through the following
 Elasticsearch REST API endpoints. These are grouped by namespace/pattern; every
@@ -88,20 +86,25 @@ endpoint under each pattern is currently unhandled unless listed in
 
 #### Document APIs (other than `_doc` and `_update`)
 
-- `/{index}/_validate/query`
+- `/{index}/_validate/query` (needs query/mapping rewrites that are not implemented yet)
 
 #### Search, query, and analytics
 
-- `/_explain`
-- `/_search/scroll`, `/_scroll`, `/_clear/scroll`, `/_pit`
-- `/_async_search/*`, `/_knn_search`, `/_eql/*`, `/_sql/*`
-- `/{index}/_mvt/*`
-- `/_application/*`, `/_query_rules/*`, `/_synonyms/*`
+- `/_explain` (root explain requires body and index rewrite support we do not provide yet)
+- `/_search/scroll`, `/_scroll`, `/_clear/scroll`, `/_pit` (tenant-safe handling of
+  scroll/PIT IDs is not implemented)
+- `/_async_search/*` (async IDs would need tenant scoping and lifecycle tracking)
+- `/_knn_search` (KNN query structure is not yet rewritten for per-tenant fields)
+- `/_eql/*` (EQL query parsing/rewriting is not implemented)
+- `/_sql/*` (SQL translation would require query parsing and index mapping)
+- `/{index}/_mvt/*` (vector tile format includes field paths we do not rewrite)
+- `/_application/*`, `/_query_rules/*`, `/_synonyms/*` (rule/synonym bodies reference
+  indices and fields that are not rewritten)
 
 #### Ingest and pipelines
 
-- `/_ingest/*`
-- `/_enrich/*`
+- `/_ingest/*` (pipeline definitions can reference index names and field paths)
+- `/_enrich/*` (enrich policies and execution reference indices/fields we do not rewrite)
 
 
 ## Development
@@ -115,12 +118,40 @@ ES_TMNT_HTTP_PORT=8080 ES_TMNT_UPSTREAM_URL=http://localhost:9200 go run ./cmd/e
 Configuration can be supplied via environment variables or a JSON config file path in
 `ES_TMNT_CONFIG`.
 
+Example `config.json`:
+
+```json
+{
+  "ports": {
+    "http": 8080,
+    "admin": 8081
+  },
+  "upstream_url": "http://localhost:9200",
+  "mode": "shared",
+  "tenant_regex": {
+    "pattern": "^(?P<prefix>[^-]+)-(?P<tenant>[^-]+)(?P<postfix>.*)$"
+  },
+  "shared_index": {
+    "name": "{{.index}}",
+    "alias_template": "alias-{{.index}}-{{.tenant}}",
+    "tenant_field": "tenant_id"
+  },
+  "index_per_tenant": {
+    "index_template": "{{.index}}-{{.tenant}}"
+  },
+  "passthrough_paths": [
+    "/_cluster/*",
+    "/_cat/*"
+  ]
+}
+```
+
 ## Unit tests
 
 Run the unit test suite with the helper script:
 
 ```bash
-./test.sh
+./scripts/run-unit-tests.sh
 ```
 
 ## Integration tests
