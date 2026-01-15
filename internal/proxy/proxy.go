@@ -407,6 +407,10 @@ func (p *Proxy) handleAnalyze(w http.ResponseWriter, r *http.Request, index stri
 			return
 		}
 	}
+	if targetIndex == "" {
+		p.reject(w, "missing index for _analyze")
+		return
+	}
 	p.applyIndexRewrite(r, index, targetIndex)
 	p.proxy.ServeHTTP(w, r)
 }
