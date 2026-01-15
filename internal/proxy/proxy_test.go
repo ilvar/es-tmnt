@@ -187,6 +187,103 @@ func TestIndexPerTenantBulkRewrite(t *testing.T) {
 	}
 }
 
+func TestSharedIndexCreateRewrite(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "shared"
+	cfg.SharedIndex.Name = "shared-{{.index}}"
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	body := []byte(`{"mappings":{"properties":{"field1":{"type":"keyword"}}}}`)
+	req := httptest.NewRequest(http.MethodPut, "/products-tenant1", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, capturedBody, method, _ := capture.snapshot()
+	if method != http.MethodPut {
+		t.Fatalf("expected method PUT, got %s", method)
+	}
+	if path != "/shared-products" {
+		t.Fatalf("expected path /shared-products, got %q", path)
+	}
+	if string(bytes.TrimSpace(capturedBody)) != string(bytes.TrimSpace(body)) {
+		t.Fatalf("expected body unchanged, got %s", string(capturedBody))
+	}
+}
+
+func TestIndexPerTenantMappingRewrite(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "index-per-tenant"
+	cfg.IndexPerTenant.IndexTemplate = "{{.index}}-{{.tenant}}"
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	body := []byte(`{"properties":{"field1":{"type":"keyword"}}}`)
+	req := httptest.NewRequest(http.MethodPut, "/orders-tenant2/_mapping", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, capturedBody, _, _ := capture.snapshot()
+	if path != "/orders-tenant2/_mapping" {
+		t.Fatalf("expected path /orders-tenant2/_mapping, got %q", path)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(capturedBody, &payload); err != nil {
+		t.Fatalf("parse body: %v", err)
+	}
+	props := payload["properties"].(map[string]interface{})
+	nested := props["orders"].(map[string]interface{})
+	if _, ok := nested["properties"].(map[string]interface{})["field1"]; !ok {
+		t.Fatalf("expected nested mapping for field1, got %v", nested)
+	}
+}
+
+func TestIndexPerTenantDeleteRewrite(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "index-per-tenant"
+	cfg.IndexPerTenant.IndexTemplate = "shared-{{.tenant}}"
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodDelete, "/orders-tenant2", nil)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, _, method, _ := capture.snapshot()
+	if method != http.MethodDelete {
+		t.Fatalf("expected method DELETE, got %s", method)
+	}
+	if path != "/shared-tenant2" {
+		t.Fatalf("expected path /shared-tenant2, got %q", path)
+	}
+}
+
+func TestClusterPassthrough(t *testing.T) {
+	cfg := config.Default()
+	proxyHandler, capture := newProxyWithServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/_cluster/health", nil)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	path, _, _, count := capture.snapshot()
+	if count != 1 {
+		t.Fatalf("expected upstream call, got %d", count)
+	}
+	if path != "/_cluster/health" {
+		t.Fatalf("expected path /_cluster/health, got %q", path)
+	}
+}
+
 func TestUnsupportedRequestReturnsError(t *testing.T) {
 	cfg := config.Default()
 	cfg.Mode = "shared"
