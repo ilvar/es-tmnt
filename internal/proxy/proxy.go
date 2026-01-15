@@ -93,6 +93,72 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			p.handleBulk(w, r, "")
 			return
 		}
+		switch segments[0] {
+		case "_analyze":
+			p.setResponseMode(w, responseModeHandled)
+			p.handleAnalyze(w, r, "")
+			return
+		case "_search":
+			if len(segments) == 2 && segments[1] == "template" {
+				p.setResponseMode(w, responseModeHandled)
+				p.handleSearchTemplate(w, r, "")
+				return
+			}
+			if len(segments) == 1 {
+				p.setResponseMode(w, responseModeHandled)
+				p.handleSearch(w, r, "")
+				return
+			}
+			p.setResponseMode(w, responseModeHandled)
+			p.reject(w, "unsupported system endpoint")
+			return
+		case "_render":
+			if len(segments) == 2 && segments[1] == "template" {
+				p.setResponseMode(w, responseModePassthrough)
+				p.proxy.ServeHTTP(w, r)
+				return
+			}
+			p.setResponseMode(w, responseModeHandled)
+			p.reject(w, "unsupported system endpoint")
+			return
+		case "_msearch":
+			if len(segments) == 2 && segments[1] == "template" {
+				p.setResponseMode(w, responseModePassthrough)
+				p.proxy.ServeHTTP(w, r)
+				return
+			}
+			if len(segments) == 1 {
+				p.setResponseMode(w, responseModeHandled)
+				p.handleMultiSearch(w, r, "")
+				return
+			}
+			p.setResponseMode(w, responseModeHandled)
+			p.reject(w, "unsupported system endpoint")
+			return
+		case "_query", "_rank_eval":
+			if len(segments) == 1 {
+				p.setResponseMode(w, responseModeHandled)
+				p.handleQueryEndpoint(w, r, "")
+				return
+			}
+			p.setResponseMode(w, responseModeHandled)
+			p.reject(w, "unsupported system endpoint")
+			return
+		case "_explain":
+			p.setResponseMode(w, responseModeHandled)
+			p.reject(w, "unsupported system endpoint")
+      return
+    }
+		if segments[0] == "_delete_by_query" {
+			p.setResponseMode(w, responseModeHandled)
+			p.handleRootQueryByIndex(w, r, "_delete_by_query")
+			return
+		}
+		if segments[0] == "_update_by_query" {
+			p.setResponseMode(w, responseModeHandled)
+			p.handleRootQueryByIndex(w, r, "_update_by_query")
+			return
+		}
 		if p.isCatIndices(r.URL.Path) {
 			p.setResponseMode(w, responseModeHandled)
 			p.proxy.ServeHTTP(w, r)
@@ -126,6 +192,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.setResponseMode(w, responseModeHandled)
 	switch segments[1] {
 	case "_search":
+		if len(segments) >= 3 && segments[2] == "template" {
+			if len(segments) == 3 {
+				p.handleSearchTemplate(w, r, index)
+			} else {
+				p.reject(w, "unsupported endpoint")
+			}
+			return
+		}
 		p.handleSearch(w, r, index)
 	case "_doc":
 		p.handleDoc(w, r, index)
@@ -139,13 +213,55 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.handleBulk(w, r, index)
 	case "_mapping":
 		p.handleMapping(w, r, index)
+	case "_query", "_rank_eval":
+		p.handleQueryEndpoint(w, r, index)
+	case "_explain":
+    p.handleExplain(w, r, index)
+	case "_alias", "_settings", "_stats", "_segments", "_recovery", "_refresh", "_flush", "_forcemerge",
+		"_open", "_close", "_shrink", "_split", "_rollover", "_clone", "_freeze", "_unfreeze", "_upgrade",
+		"_termvectors", "_mtermvectors", "_explain":
+		p.handleIndexPassthrough(w, r, index)
+	case "_get":
+		if len(segments) < 3 {
+			p.reject(w, "missing document id")
+			return
+		}
+		p.handleGet(w, r, index, segments[2])
+	case "_analyze":
+		p.handleAnalyze(w, r, index)
+	case "_mget":
+		p.handleMget(w, r, index)
+	case "_delete":
+		if len(segments) < 3 {
+			p.reject(w, "missing document id")
+			return
+		}
+		p.handleDelete(w, r, index, segments[2])
+	case "_delete_by_query":
+		p.handleQueryEndpoint(w, r, index, "_delete_by_query")
+	case "_update_by_query":
+		p.handleQueryEndpoint(w, r, index, "_update_by_query")
+	case "_count":
+		p.handleCount(w, r, index)
 	default:
+		if segments[1] == "_cache" && len(segments) > 2 && segments[2] == "clear" {
+			p.handleIndexPassthrough(w, r, index)
+			return
+		}
+		if segments[1] == "_validate" && len(segments) > 2 && segments[2] == "query" {
+			p.reject(w, "unsupported endpoint")
+			return
+		}
+		if segments[1] == "_search_shards" || segments[1] == "_field_caps" {
+			p.reject(w, "unsupported endpoint")
+			return
+		}
 		p.reject(w, "unsupported endpoint")
 	}
 }
 
 func (p *Proxy) handleSearch(w http.ResponseWriter, r *http.Request, index string) {
-	baseIndex, tenantID, err := p.parseIndex(index)
+	baseIndex, tenantID, err := p.resolveIndex(index, r)
 	if err != nil {
 		p.reject(w, err.Error())
 		return
@@ -164,19 +280,37 @@ func (p *Proxy) handleSearch(w http.ResponseWriter, r *http.Request, index strin
 			return
 		}
 	}
-	if r.Body != nil {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			p.reject(w, "failed to read body")
-			return
-		}
-		rewritten, err := p.rewriteQueryBody(body, baseIndex)
+	if err := p.rewriteQueryRequest(r, baseIndex); err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	p.applyIndexRewrite(r, index, aliasIndex)
+	p.proxy.ServeHTTP(w, r)
+}
+
+func (p *Proxy) handleSearchTemplate(w http.ResponseWriter, r *http.Request, index string) {
+	baseIndex, tenantID, err := p.resolveIndex(index, r)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	aliasIndex := index
+	if isSharedMode(p.cfg.Mode) {
+		aliasIndex, err = p.renderAlias(baseIndex, tenantID)
 		if err != nil {
 			p.reject(w, err.Error())
 			return
 		}
-		r.Body = io.NopCloser(bytes.NewReader(rewritten))
-		r.ContentLength = int64(len(rewritten))
+	} else {
+		aliasIndex, err = p.renderIndex(p.perTenantIdx, baseIndex, tenantID)
+		if err != nil {
+			p.reject(w, err.Error())
+			return
+		}
+	}
+	if err := p.rewriteQueryRequest(r, baseIndex); err != nil {
+		p.reject(w, err.Error())
+		return
 	}
 	p.rewriteIndexPath(r, index, aliasIndex)
 	p.proxy.ServeHTTP(w, r)
@@ -263,6 +397,115 @@ func (p *Proxy) handleUpdate(w http.ResponseWriter, r *http.Request, index strin
 		}
 	}
 	p.rewriteIndexPath(r, index, targetIndex)
+	p.proxy.ServeHTTP(w, r)
+}
+
+func (p *Proxy) handleAnalyze(w http.ResponseWriter, r *http.Request, index string) {
+	targetIndex := index
+	if index == "" {
+		var err error
+		targetIndex, err = p.rewriteIndexQueryParam(r, "index")
+		if err != nil {
+			p.reject(w, err.Error())
+			return
+		}
+	} else {
+		baseIndex, tenantID, err := p.parseIndex(index)
+		if err != nil {
+			p.reject(w, err.Error())
+			return
+		}
+		targetIndex, err = p.renderTargetIndex(baseIndex, tenantID)
+		if err != nil {
+			p.reject(w, err.Error())
+			return
+		}
+	}
+	if targetIndex == "" {
+		p.reject(w, "missing index for _analyze")
+		return
+	}
+	p.applyIndexRewrite(r, index, targetIndex)
+	p.proxy.ServeHTTP(w, r)
+}
+
+func (p *Proxy) handleQueryEndpoint(w http.ResponseWriter, r *http.Request, index string) {
+	baseIndex, tenantID, err := p.resolveIndex(index, r)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	targetIndex := index
+	if isSharedMode(p.cfg.Mode) {
+		targetIndex, err = p.renderAlias(baseIndex, tenantID)
+		if err != nil {
+			p.reject(w, err.Error())
+			return
+		}
+	} else {
+		targetIndex, err = p.renderIndex(p.perTenantIdx, baseIndex, tenantID)
+		if err != nil {
+			p.reject(w, err.Error())
+			return
+		}
+	}
+	if err := p.rewriteQueryRequest(r, baseIndex); err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	p.applyIndexRewrite(r, index, targetIndex)
+	p.proxy.ServeHTTP(w, r)
+}
+
+func (p *Proxy) handleExplain(w http.ResponseWriter, r *http.Request, index string) {
+	baseIndex, tenantID, err := p.resolveIndex(index, r)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	targetIndex := index
+	if isSharedMode(p.cfg.Mode) {
+		targetIndex, err = p.renderAlias(baseIndex, tenantID)
+		if err != nil {
+			p.reject(w, err.Error())
+			return
+		}
+	} else {
+		targetIndex, err = p.renderIndex(p.perTenantIdx, baseIndex, tenantID)
+		if err != nil {
+			p.reject(w, err.Error())
+			return
+		}
+	}
+	if err := p.rewriteQueryRequest(r, baseIndex); err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	p.applyIndexRewrite(r, index, targetIndex)
+	p.proxy.ServeHTTP(w, r)
+}
+
+func (p *Proxy) handleMultiSearch(w http.ResponseWriter, r *http.Request, index string) {
+	if r.Method != http.MethodPost {
+		p.reject(w, "unsupported method for msearch")
+		return
+	}
+	if r.Body == nil {
+		p.reject(w, "missing body")
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		p.reject(w, "failed to read body")
+		return
+	}
+	rewritten, err := p.rewriteMultiSearchBody(body, index)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(rewritten))
+	r.ContentLength = int64(len(rewritten))
 	p.proxy.ServeHTTP(w, r)
 }
 
@@ -424,7 +667,111 @@ func (p *Proxy) handleTransform(w http.ResponseWriter, r *http.Request) {
 	p.proxy.ServeHTTP(w, r)
 }
 
-func (p *Proxy) handleRollup(w http.ResponseWriter, r *http.Request) {
+
+func (p *Proxy) handleRollup(w http.ResponseWriter, r *http.Request) {}
+
+func (p *Proxy) handleIndexPassthrough(w http.ResponseWriter, r *http.Request, index string) {
+	baseIndex, tenantID, err := p.parseIndex(index)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	targetIndex, err := p.renderTargetIndex(baseIndex, tenantID)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	p.rewriteIndexPath(r, index, targetIndex)
+	p.proxy.ServeHTTP(w, r)
+}
+
+func (p *Proxy) handleQueryEndpoint(w http.ResponseWriter, r *http.Request, index, endpoint string) {
+	baseIndex, tenantID, err := p.parseIndex(index)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	if r.Body == nil {
+		p.reject(w, "missing body")
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		p.reject(w, "failed to read body")
+		return
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		p.reject(w, "missing body")
+		return
+	}
+	rewritten, err := p.rewriteQueryBody(body, baseIndex)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(rewritten))
+	r.ContentLength = int64(len(rewritten))
+	r.Method = http.MethodPost
+	targetIndex, err := p.renderQueryIndex(baseIndex, tenantID)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	p.setPathSegments(r, []string{targetIndex, endpoint})
+	p.proxy.ServeHTTP(w, r)
+}
+
+func (p *Proxy) handleGet(w http.ResponseWriter, r *http.Request, index, docID string) {
+	if docID == "" {
+		p.reject(w, "missing document id")
+		return
+	}
+	query, err := buildIDsQuery([]string{docID})
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	p.handleQuerySearch(w, r, index, query)
+}
+
+func (p *Proxy) handleMget(w http.ResponseWriter, r *http.Request, index string) {
+	if r.Body == nil {
+		p.reject(w, "missing body")
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		p.reject(w, "failed to read body")
+		return
+	}
+	ids, err := extractMgetIDs(body, index)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	query, err := buildIDsQuery(ids)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	p.handleQuerySearch(w, r, index, query)
+}
+
+func (p *Proxy) handleDelete(w http.ResponseWriter, r *http.Request, index, docID string) {
+	if docID == "" {
+		p.reject(w, "missing document id")
+		return
+	}
+	query, err := buildIDsQuery([]string{docID})
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	p.handleQueryEndpointWithBody(w, r, index, "_delete_by_query", query)
+}
+
+func (p *Proxy) handleCount(w http.ResponseWriter, r *http.Request, index string) {
+	var payload map[string]interface{}
 	if r.Body != nil {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -432,16 +779,87 @@ func (p *Proxy) handleRollup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(bytes.TrimSpace(body)) != 0 {
-			rewritten, err := p.rewriteRollupBody(body)
-			if err != nil {
-				p.reject(w, err.Error())
+			if err := json.Unmarshal(body, &payload); err != nil {
+				p.reject(w, "invalid JSON body")
 				return
 			}
-			r.Body = io.NopCloser(bytes.NewReader(rewritten))
-			r.ContentLength = int64(len(rewritten))
 		}
 	}
+	if payload == nil {
+		payload = map[string]interface{}{}
+	}
+	if _, ok := payload["query"]; !ok {
+		payload["query"] = map[string]interface{}{"match_all": map[string]interface{}{}}
+	}
+	payload["size"] = 0
+	queryBody, err := json.Marshal(payload)
+	if err != nil {
+		p.reject(w, "failed to build query")
+		return
+	}
+	p.handleQuerySearch(w, r, index, queryBody)
+}
+
+func (p *Proxy) handleQuerySearch(w http.ResponseWriter, r *http.Request, index string, queryBody []byte) {
+	baseIndex, tenantID, err := p.parseIndex(index)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	rewritten, err := p.rewriteQueryBody(queryBody, baseIndex)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(rewritten))
+	r.ContentLength = int64(len(rewritten))
+	r.Method = http.MethodPost
+	targetIndex, err := p.renderQueryIndex(baseIndex, tenantID)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	p.setPathSegments(r, []string{targetIndex, "_search"})
 	p.proxy.ServeHTTP(w, r)
+}
+
+func (p *Proxy) handleQueryEndpointWithBody(w http.ResponseWriter, r *http.Request, index, endpoint string, queryBody []byte) {
+	baseIndex, tenantID, err := p.parseIndex(index)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	rewritten, err := p.rewriteQueryBody(queryBody, baseIndex)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(rewritten))
+	r.ContentLength = int64(len(rewritten))
+	r.Method = http.MethodPost
+	targetIndex, err := p.renderQueryIndex(baseIndex, tenantID)
+	if err != nil {
+		p.reject(w, err.Error())
+		return
+	}
+	p.setPathSegments(r, []string{targetIndex, endpoint})
+	p.proxy.ServeHTTP(w, r)
+}
+
+func (p *Proxy) handleRootQueryByIndex(w http.ResponseWriter, r *http.Request, endpoint string) {
+	query := r.URL.Query()
+	index := query.Get("index")
+	if index == "" {
+		p.reject(w, "missing index")
+		return
+	}
+	if strings.Contains(index, ",") {
+		p.reject(w, "multiple indices not supported")
+		return
+	}
+	query.Del("index")
+	r.URL.RawQuery = query.Encode()
+	p.handleQueryEndpoint(w, r, index, endpoint)
 }
 
 func (p *Proxy) rewriteIndexPath(r *http.Request, original, replacement string) {
@@ -453,6 +871,102 @@ func (p *Proxy) rewriteIndexPath(r *http.Request, original, replacement string) 
 		return
 	}
 	segments[0] = replacement
+	r.URL.Path = "/" + path.Join(segments...)
+	r.RequestURI = r.URL.Path
+}
+
+func (p *Proxy) applyIndexRewrite(r *http.Request, original, replacement string) {
+	if original != "" {
+		p.rewriteIndexPath(r, original, replacement)
+		return
+	}
+	if replacement != "" {
+		p.setIndexQueryParam(r, replacement)
+	}
+}
+
+func (p *Proxy) resolveIndex(pathIndex string, r *http.Request) (string, string, error) {
+	if pathIndex != "" {
+		return p.parseIndex(pathIndex)
+	}
+	indexValue, err := p.indexFromQuery(r, "index")
+	if err != nil {
+		return "", "", err
+	}
+	if indexValue == "" {
+		return "", "", errors.New("missing index")
+	}
+	return p.parseIndex(indexValue)
+}
+
+func (p *Proxy) indexFromQuery(r *http.Request, key string) (string, error) {
+	q := r.URL.Query()
+	indexValue := strings.TrimSpace(q.Get(key))
+	if indexValue == "" {
+		return "", nil
+	}
+	if strings.Contains(indexValue, ",") {
+		return "", errors.New("multiple indices not supported")
+	}
+	return indexValue, nil
+}
+
+func (p *Proxy) setIndexQueryParam(r *http.Request, replacement string) {
+	q := r.URL.Query()
+	q.Set("index", replacement)
+	r.URL.RawQuery = q.Encode()
+	r.RequestURI = r.URL.RequestURI()
+}
+
+func (p *Proxy) rewriteIndexQueryParam(r *http.Request, key string) (string, error) {
+	indexValue, err := p.indexFromQuery(r, key)
+	if err != nil {
+		return "", err
+	}
+	if indexValue == "" {
+		return "", nil
+	}
+	baseIndex, tenantID, err := p.parseIndex(indexValue)
+	if err != nil {
+		return "", err
+	}
+	targetIndex, err := p.renderTargetIndex(baseIndex, tenantID)
+	if err != nil {
+		return "", err
+	}
+	q := r.URL.Query()
+	q.Set(key, targetIndex)
+	r.URL.RawQuery = q.Encode()
+	r.RequestURI = r.URL.RequestURI()
+	return targetIndex, nil
+}
+
+func (p *Proxy) rewriteQueryRequest(r *http.Request, baseIndex string) error {
+	if r.Body == nil {
+		if r.Method == http.MethodPost || r.Method == http.MethodPut {
+			return errors.New("missing body")
+		}
+		return nil
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return errors.New("failed to read body")
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
+		return nil
+	}
+	rewritten, err := p.rewriteQueryBody(body, baseIndex)
+	if err != nil {
+		return err
+	}
+	r.Body = io.NopCloser(bytes.NewReader(rewritten))
+	r.ContentLength = int64(len(rewritten))
+	return nil
+}
+
+func (p *Proxy) setPathSegments(r *http.Request, segments []string) {
 	r.URL.Path = "/" + path.Join(segments...)
 	r.RequestURI = r.URL.Path
 }
@@ -572,6 +1086,98 @@ func (p *Proxy) renderTargetIndex(baseIndex, tenantID string) (string, error) {
 	return p.renderIndex(p.perTenantIdx, baseIndex, tenantID)
 }
 
+func (p *Proxy) renderQueryIndex(baseIndex, tenantID string) (string, error) {
+	if isSharedMode(p.cfg.Mode) {
+		return p.renderAlias(baseIndex, tenantID)
+	}
+	return p.renderIndex(p.perTenantIdx, baseIndex, tenantID)
+}
+
+func extractMgetIDs(body []byte, index string) ([]string, error) {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("invalid JSON body: %w", err)
+	}
+	if idsValue, ok := payload["ids"]; ok {
+		ids, err := coerceStringList(idsValue)
+		if err != nil {
+			return nil, err
+		}
+		if len(ids) == 0 {
+			return nil, errors.New("mget ids list is empty")
+		}
+		return ids, nil
+	}
+	docsValue, ok := payload["docs"]
+	if !ok {
+		return nil, errors.New("mget body requires docs or ids")
+	}
+	docs, ok := docsValue.([]interface{})
+	if !ok {
+		return nil, errors.New("mget docs must be an array")
+	}
+	ids := make([]string, 0, len(docs))
+	for _, doc := range docs {
+		entry, ok := doc.(map[string]interface{})
+		if !ok {
+			return nil, errors.New("mget docs entries must be objects")
+		}
+		if idxValue, ok := entry["_index"]; ok {
+			idx, ok := idxValue.(string)
+			if !ok || idx == "" {
+				return nil, errors.New("mget _index must be a string")
+			}
+			if idx != index {
+				return nil, fmt.Errorf("mget _index %q does not match request index %q", idx, index)
+			}
+		}
+		idValue, ok := entry["_id"]
+		if !ok {
+			return nil, errors.New("mget docs entries must include _id")
+		}
+		id, ok := idValue.(string)
+		if !ok || id == "" {
+			return nil, errors.New("mget _id must be a string")
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("mget ids list is empty")
+	}
+	return ids, nil
+}
+
+func buildIDsQuery(ids []string) ([]byte, error) {
+	if len(ids) == 0 {
+		return nil, errors.New("ids query requires at least one id")
+	}
+	payload := map[string]interface{}{
+		"query": map[string]interface{}{
+			"ids": map[string]interface{}{
+				"values": ids,
+			},
+		},
+		"size": len(ids),
+	}
+	return json.Marshal(payload)
+}
+
+func coerceStringList(value interface{}) ([]string, error) {
+	list, ok := value.([]interface{})
+	if !ok {
+		return nil, errors.New("ids must be an array")
+	}
+	output := make([]string, 0, len(list))
+	for _, entry := range list {
+		item, ok := entry.(string)
+		if !ok || item == "" {
+			return nil, errors.New("ids must be non-empty strings")
+		}
+		output = append(output, item)
+	}
+	return output, nil
+}
+
 func (p *Proxy) isSystemPassthrough(pathValue string) bool {
 	return strings.HasPrefix(pathValue, "/_cluster") ||
 		strings.HasPrefix(pathValue, "/_cat") ||
@@ -591,6 +1197,14 @@ func (p *Proxy) isSystemPassthrough(pathValue string) bool {
 		strings.HasPrefix(pathValue, "/_watcher") ||
 		strings.HasPrefix(pathValue, "/_graph") ||
 		strings.HasPrefix(pathValue, "/_ccr")
+		strings.HasPrefix(pathValue, "/_alias") ||
+		strings.HasPrefix(pathValue, "/_aliases") ||
+		strings.HasPrefix(pathValue, "/_template") ||
+		strings.HasPrefix(pathValue, "/_index_template") ||
+		strings.HasPrefix(pathValue, "/_component_template") ||
+		strings.HasPrefix(pathValue, "/_resolve") ||
+		strings.HasPrefix(pathValue, "/_data_stream") ||
+		strings.HasPrefix(pathValue, "/_dangling")
 }
 
 func (p *Proxy) setResponseMode(w http.ResponseWriter, mode string) {
