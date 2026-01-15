@@ -47,6 +47,81 @@ Elasticsearch. A trailing `*` in the configuration acts as a prefix match.
 Cluster-level system APIs are also forwarded by default, including `/_cluster/*`,
 `/_cat/*` (except `/_cat/indices`), and `/_nodes/*`.
 
+### TODO: Unhandled Elasticsearch REST endpoints
+
+The proxy does not currently modify or explicitly pass through the following
+Elasticsearch REST API endpoints. These are grouped by namespace/pattern; every
+endpoint under each pattern is currently unhandled unless listed in
+“Supported endpoints and behavior” or “Passthrough paths” above.
+
+#### Index and alias management
+
+- `/_alias/*`, `/_aliases`
+- `/_template/*`, `/_index_template/*`, `/_component_template/*`
+- `/_resolve/*`, `/_data_stream/*`, `/_dangling/*`
+- `/{index}/_alias/*`
+- `/{index}/_settings`, `/{index}/_stats`, `/{index}/_segments`, `/{index}/_recovery`
+- `/{index}/_refresh`, `/{index}/_flush`, `/{index}/_forcemerge`, `/{index}/_cache/clear`
+- `/{index}/_open`, `/{index}/_close`, `/{index}/_shrink`, `/{index}/_split`,
+  `/{index}/_rollover`, `/{index}/_clone`, `/{index}/_freeze`, `/{index}/_unfreeze`,
+  `/{index}/_upgrade`
+
+#### Document APIs (other than `_doc` and `_update`)
+
+- `/{index}/_get/*`, `/{index}/_mget`
+- `/{index}/_delete/*`, `/{index}/_delete_by_query`, `/_delete_by_query`
+- `/{index}/_termvectors/*`, `/{index}/_mtermvectors`
+- `/{index}/_explain/*`, `/{index}/_source/*`
+- `/{index}/_update_by_query`, `/_update_by_query`
+- `/{index}/_rank_eval`, `/{index}/_count`, `/{index}/_validate/query`
+- `/{index}/_search_shards`, `/{index}/_field_caps`
+
+#### Search, query, and analytics
+
+- `/_analyze`
+- `/_search`, `/{index}/_search/template`, `/_msearch`, `/_msearch/template`,
+  `/_search/template`, `/_render/template`
+- `/_search/scroll`, `/_scroll`, `/_clear/scroll`, `/_pit`
+- `/_async_search/*`, `/_knn_search`, `/_eql/*`, `/_sql/*`
+- `/_query`, `/_explain`, `/_rank_eval`
+- `/_terms_enum`
+- `/{index}/_mvt/*`
+- `/_application/*`, `/_query_rules/*`, `/_synonyms/*`
+
+#### Ingest and pipelines
+
+- `/_ingest/*`
+- `/_enrich/*`
+
+#### Snapshot and lifecycle management
+
+- `/_snapshot/*`
+- `/_searchable_snapshots/*`
+- `/_slm/*`
+- `/_ilm/*`
+
+#### Tasks, scripts, and cluster utilities
+
+- `/_tasks/*`
+- `/_scripts/*`
+- `/_autoscaling/*`
+- `/_migration/*`
+- `/_features/*`
+
+#### Security, licensing, and governance
+
+- `/_security/*`
+- `/_license/*`
+
+#### Machine learning and advanced features
+
+- `/_ml/*`
+- `/_transform/*`
+- `/_rollup/*`
+- `/_watcher/*`
+- `/_graph/*`
+- `/_ccr/*`
+
 ## Development
 
 Build and run locally:
