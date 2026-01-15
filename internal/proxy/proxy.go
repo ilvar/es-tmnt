@@ -242,11 +242,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		p.handleGet(w, r, index, segments[2])
 	case "_source":
-		if len(segments) < 3 {
-			p.reject(w, "missing document id")
-			return
+		docID := ""
+		if len(segments) >= 3 {
+			docID = segments[2]
 		}
-		p.handleSource(w, r, index, segments[2])
+		p.handleSource(w, r, index, docID)
 	case "_analyze":
 		p.handleAnalyze(w, r, index)
 	case "_mget":
@@ -801,7 +801,20 @@ func (p *Proxy) handleGet(w http.ResponseWriter, r *http.Request, index, docID s
 
 func (p *Proxy) handleSource(w http.ResponseWriter, r *http.Request, index, docID string) {
 	if docID == "" {
-		p.reject(w, "missing document id")
+		if r.Body == nil {
+			p.reject(w, "missing body")
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			p.reject(w, "failed to read body")
+			return
+		}
+		if len(bytes.TrimSpace(body)) == 0 {
+			p.reject(w, "missing body")
+			return
+		}
+		p.handleQuerySearch(w, r, index, body)
 		return
 	}
 	query, err := buildIDsQuery([]string{docID})
@@ -1280,6 +1293,8 @@ func (p *Proxy) isSystemPassthrough(pathValue string) bool {
 		strings.HasPrefix(pathValue, "/_template") ||
 		strings.HasPrefix(pathValue, "/_index_template") ||
 		strings.HasPrefix(pathValue, "/_component_template") ||
+		strings.HasPrefix(pathValue, "/_query_rules") ||
+		strings.HasPrefix(pathValue, "/_synonyms") ||
 		strings.HasPrefix(pathValue, "/_resolve") ||
 		strings.HasPrefix(pathValue, "/_data_stream") ||
 		strings.HasPrefix(pathValue, "/_dangling")
