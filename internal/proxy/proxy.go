@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -29,12 +30,16 @@ type Proxy struct {
 	prefixGroup  int
 	postfixGroup int
 	passthroughs []string
+	denyPatterns []*regexp.Regexp
 }
 
 const (
 	responseModeHeader      = "X-ES-TMNT"
 	responseModeHandled     = "handled"
 	responseModePassthrough = "pass-through"
+	requestCategoryTenanted = "tenanted-index"
+	requestCategoryShared   = "shared-index"
+	requestCategoryPass     = "pass-through"
 )
 
 func New(cfg config.Config) (*Proxy, error) {
@@ -70,17 +75,26 @@ func New(cfg config.Config) (*Proxy, error) {
 		prefixGroup:  prefixGroup,
 		postfixGroup: postfixGroup,
 		passthroughs: cfg.PassthroughPaths,
+		denyPatterns: cfg.SharedIndex.DenyCompiled,
 	}
 	reverseProxy.ModifyResponse = proxy.modifyResponse
 	return proxy, nil
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if indexName, err := p.requestIndexCandidate(r); err == nil && indexName != "" && p.isSharedIndexAccess(indexName) {
+		p.logRequest(r, requestCategoryShared, indexName)
+		p.setResponseMode(w, responseModeHandled)
+		p.reject(w, "direct access to shared indices is not allowed")
+		return
+	}
 	if p.isPassthrough(r.URL.Path) {
+		p.logRequest(r, requestCategoryPass, "")
 		p.setResponseMode(w, responseModePassthrough)
 		p.proxy.ServeHTTP(w, r)
 		return
 	}
+	p.logRequestWithCategory(r)
 	segments := splitPath(r.URL.Path)
 	if len(segments) == 0 {
 		p.setResponseMode(w, responseModeHandled)
@@ -967,6 +981,9 @@ func (p *Proxy) rewriteIndexPath(r *http.Request, original, replacement string) 
 	segments[0] = replacement
 	r.URL.Path = "/" + path.Join(segments...)
 	r.RequestURI = r.URL.Path
+	if original != replacement {
+		p.logVerbose("index path rewrite: %s -> %s", original, replacement)
+	}
 }
 
 func (p *Proxy) applyIndexRewrite(r *http.Request, original, replacement string) {
@@ -1010,6 +1027,7 @@ func (p *Proxy) setIndexQueryParam(r *http.Request, replacement string) {
 	q.Set("index", replacement)
 	r.URL.RawQuery = q.Encode()
 	r.RequestURI = r.URL.RequestURI()
+	p.logVerbose("index query rewrite: index -> %s", replacement)
 }
 
 func (p *Proxy) rewriteIndexQueryParam(r *http.Request, key string) (string, error) {
@@ -1032,6 +1050,7 @@ func (p *Proxy) rewriteIndexQueryParam(r *http.Request, key string) (string, err
 	q.Set(key, targetIndex)
 	r.URL.RawQuery = q.Encode()
 	r.RequestURI = r.URL.RequestURI()
+	p.logVerbose("index query rewrite: %s -> %s", indexValue, targetIndex)
 	return targetIndex, nil
 }
 
@@ -1076,6 +1095,9 @@ func (p *Proxy) setPathSegments(r *http.Request, segments []string) {
 }
 
 func (p *Proxy) parseIndex(index string) (string, string, error) {
+	if p.isSharedIndexAccess(index) {
+		return "", "", fmt.Errorf("direct access to shared indices is not allowed")
+	}
 	matches := p.cfg.TenantRegex.Compiled.FindStringSubmatch(index)
 	if matches == nil {
 		return "", "", fmt.Errorf("index '%s' does not match tenant regex", index)
@@ -1313,6 +1335,37 @@ func (p *Proxy) isSystemPassthrough(pathValue string) bool {
 		strings.HasPrefix(pathValue, "/_dangling")
 }
 
+func (p *Proxy) requestCategory(r *http.Request) (string, string) {
+	if p.isSystemPassthrough(r.URL.Path) || p.isTemplatePassthrough(r.URL.Path) {
+		return requestCategoryPass, ""
+	}
+	indexName, err := p.requestIndexCandidate(r)
+	if err != nil {
+		return requestCategoryTenanted, ""
+	}
+	if indexName != "" && p.isSharedIndexAccess(indexName) {
+		return requestCategoryShared, indexName
+	}
+	return requestCategoryTenanted, indexName
+}
+
+func (p *Proxy) requestIndexCandidate(r *http.Request) (string, error) {
+	segments := splitPath(r.URL.Path)
+	if len(segments) == 0 {
+		return "", nil
+	}
+	if strings.HasPrefix(segments[0], "_") {
+		return p.indexFromQuery(r, "index")
+	}
+	return segments[0], nil
+}
+
+func (p *Proxy) isTemplatePassthrough(pathValue string) bool {
+	segments := splitPath(pathValue)
+	return len(segments) == 2 && ((segments[0] == "_render" && segments[1] == "template") ||
+		(segments[0] == "_msearch" && segments[1] == "template"))
+}
+
 func (p *Proxy) setResponseMode(w http.ResponseWriter, mode string) {
 	w.Header().Set(responseModeHeader, mode)
 }
@@ -1351,6 +1404,35 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 	rewritten := p.addTenantToCatIndicesText(body)
 	p.replaceResponseBody(resp, rewritten)
 	return nil
+}
+
+func (p *Proxy) logRequestWithCategory(r *http.Request) {
+	category, indexName := p.requestCategory(r)
+	p.logRequest(r, category, indexName)
+}
+
+func (p *Proxy) logRequest(r *http.Request, category, indexName string) {
+	if indexName == "" {
+		log.Printf("request: method=%s path=%s category=%s mode=%s", r.Method, r.URL.Path, category, p.cfg.Mode)
+		return
+	}
+	log.Printf("request: method=%s path=%s category=%s index=%s mode=%s", r.Method, r.URL.Path, category, indexName, p.cfg.Mode)
+}
+
+func (p *Proxy) logVerbose(format string, args ...interface{}) {
+	if !p.cfg.Verbose {
+		return
+	}
+	log.Printf("verbose: "+format, args...)
+}
+
+func (p *Proxy) isSharedIndexAccess(indexName string) bool {
+	for _, pattern := range p.denyPatterns {
+		if pattern != nil && pattern.MatchString(indexName) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Proxy) addTenantToCatIndicesJSON(body []byte) ([]byte, error) {

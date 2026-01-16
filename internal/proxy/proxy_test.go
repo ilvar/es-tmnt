@@ -2497,7 +2497,8 @@ func TestHandleMgetIdsNotString(t *testing.T) {
 
 func TestPrefixFieldEmptyField(t *testing.T) {
 	// Test prefixField with empty field
-	result := prefixField("orders", "")
+	proxyHandler, _ := newProxyWithServer(t, config.Default())
+	result := proxyHandler.prefixField("orders", "")
 	if result != "" {
 		t.Fatalf("expected empty string, got %q", result)
 	}
@@ -2505,7 +2506,8 @@ func TestPrefixFieldEmptyField(t *testing.T) {
 
 func TestPrefixFieldAlreadyPrefixed(t *testing.T) {
 	// Test prefixField with already prefixed field
-	result := prefixField("orders", "orders.field1")
+	proxyHandler, _ := newProxyWithServer(t, config.Default())
+	result := proxyHandler.prefixField("orders", "orders.field1")
 	if result != "orders.field1" {
 		t.Fatalf("expected orders.field1, got %q", result)
 	}
@@ -2513,7 +2515,8 @@ func TestPrefixFieldAlreadyPrefixed(t *testing.T) {
 
 func TestPrefixFieldNewPrefix(t *testing.T) {
 	// Test prefixField with new prefix
-	result := prefixField("orders", "field1")
+	proxyHandler, _ := newProxyWithServer(t, config.Default())
+	result := proxyHandler.prefixField("orders", "field1")
 	if result != "orders.field1" {
 		t.Fatalf("expected orders.field1, got %q", result)
 	}
@@ -2916,7 +2919,8 @@ func TestRewriteIndexNameInvalidIndex(t *testing.T) {
 }
 
 func TestRewriteQueryValuePrefix(t *testing.T) {
-	result := rewriteQueryValue(map[string]interface{}{
+	proxyHandler, _ := newProxyWithServer(t, config.Default())
+	result := proxyHandler.rewriteQueryValue(map[string]interface{}{
 		"prefix": map[string]interface{}{"field1": "value"},
 	}, "orders")
 	obj := result.(map[string]interface{})
@@ -2927,7 +2931,8 @@ func TestRewriteQueryValuePrefix(t *testing.T) {
 }
 
 func TestRewriteQueryValueWildcard(t *testing.T) {
-	result := rewriteQueryValue(map[string]interface{}{
+	proxyHandler, _ := newProxyWithServer(t, config.Default())
+	result := proxyHandler.rewriteQueryValue(map[string]interface{}{
 		"wildcard": map[string]interface{}{"field1": "value"},
 	}, "orders")
 	obj := result.(map[string]interface{})
@@ -2938,7 +2943,8 @@ func TestRewriteQueryValueWildcard(t *testing.T) {
 }
 
 func TestRewriteQueryValueRegexp(t *testing.T) {
-	result := rewriteQueryValue(map[string]interface{}{
+	proxyHandler, _ := newProxyWithServer(t, config.Default())
+	result := proxyHandler.rewriteQueryValue(map[string]interface{}{
 		"regexp": map[string]interface{}{"field1": "value"},
 	}, "orders")
 	obj := result.(map[string]interface{})
@@ -2949,7 +2955,8 @@ func TestRewriteQueryValueRegexp(t *testing.T) {
 }
 
 func TestRewriteQueryValueTerm(t *testing.T) {
-	result := rewriteQueryValue(map[string]interface{}{
+	proxyHandler, _ := newProxyWithServer(t, config.Default())
+	result := proxyHandler.rewriteQueryValue(map[string]interface{}{
 		"term": map[string]interface{}{"field1": "value"},
 	}, "orders")
 	obj := result.(map[string]interface{})
@@ -2960,7 +2967,8 @@ func TestRewriteQueryValueTerm(t *testing.T) {
 }
 
 func TestRewriteQueryValueRange(t *testing.T) {
-	result := rewriteQueryValue(map[string]interface{}{
+	proxyHandler, _ := newProxyWithServer(t, config.Default())
+	result := proxyHandler.rewriteQueryValue(map[string]interface{}{
 		"range": map[string]interface{}{"field1": map[string]interface{}{"gte": 10}},
 	}, "orders")
 	obj := result.(map[string]interface{})
@@ -2971,21 +2979,24 @@ func TestRewriteQueryValueRange(t *testing.T) {
 }
 
 func TestRewriteFieldObjectNonObject(t *testing.T) {
-	result := rewriteFieldObject("not an object", "orders")
+	proxyHandler, _ := newProxyWithServer(t, config.Default())
+	result := proxyHandler.rewriteFieldObject("not an object", "orders")
 	if result != "not an object" {
 		t.Fatalf("expected unchanged value, got %v", result)
 	}
 }
 
 func TestRewriteSortValueNonList(t *testing.T) {
-	result := rewriteSortValue("not a list", "orders")
+	proxyHandler, _ := newProxyWithServer(t, config.Default())
+	result := proxyHandler.rewriteSortValue("not a list", "orders")
 	if result != "not a list" {
 		t.Fatalf("expected unchanged value, got %v", result)
 	}
 }
 
 func TestRewriteSourceFilterString(t *testing.T) {
-	result := rewriteSourceFilter("not supported", "orders")
+	proxyHandler, _ := newProxyWithServer(t, config.Default())
+	result := proxyHandler.rewriteSourceFilter("not supported", "orders")
 	if result != "not supported" {
 		t.Fatalf("expected unchanged value, got %v", result)
 	}
@@ -3197,7 +3208,7 @@ func TestParseIndexMissingGroups(t *testing.T) {
 	cfg := config.Default()
 	invalidRegex := regexp.MustCompile(`^(.*)$`)
 	cfg.TenantRegex.Compiled = invalidRegex
-	
+
 	// Create proxy manually to test the error path in parseIndex
 	// But New() validates groups, so we need to test a different way
 	// Actually, this case is already covered - groups are validated in New()
@@ -3222,13 +3233,43 @@ func TestParseIndexInvalidIndex(t *testing.T) {
 	}
 }
 
+func TestParseIndexBlockedSharedIndex(t *testing.T) {
+	cfg := config.Default()
+	cfg.SharedIndex.DenyPatterns = []string{"^shared-index$"}
+	cfg.SharedIndex.DenyCompiled = []*regexp.Regexp{regexp.MustCompile("^shared-index$")}
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	_, _, err := proxyHandler.parseIndex("shared-index")
+	if err == nil {
+		t.Fatalf("expected error for shared index access")
+	}
+	if !strings.Contains(err.Error(), "direct access to shared indices") {
+		t.Fatalf("expected shared index error, got %v", err)
+	}
+}
+
+func TestRejectDirectSharedIndexAccess(t *testing.T) {
+	cfg := config.Default()
+	cfg.SharedIndex.DenyPatterns = []string{"^shared-index$"}
+	cfg.SharedIndex.DenyCompiled = []*regexp.Regexp{regexp.MustCompile("^shared-index$")}
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/shared-index/_search", nil)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+}
+
 func TestParseIndexEmptyGroups(t *testing.T) {
 	cfg := config.Default()
 	// Create a regex where groups can be empty
 	cfg.TenantRegex.Pattern = `^(?P<prefix>.*)-(?P<tenant>.*)-(?P<postfix>.*)$`
 	compiled, _ := regexp.Compile(cfg.TenantRegex.Pattern)
 	cfg.TenantRegex.Compiled = compiled
-	
+
 	proxyHandler, _ := newProxyWithServer(t, cfg)
 
 	// Test with index that matches but results in empty baseIndex and tenantID
@@ -3395,7 +3436,8 @@ func TestNewProxyInvalidRegexGroups(t *testing.T) {
 }
 
 func TestQueryValuePrefix(t *testing.T) {
-	result := rewriteQueryValue(map[string]interface{}{
+	proxyHandler, _ := newProxyWithServer(t, config.Default())
+	result := proxyHandler.rewriteQueryValue(map[string]interface{}{
 		"prefix": map[string]interface{}{"field1": "value"},
 	}, "orders")
 	obj := result.(map[string]interface{})
@@ -3406,7 +3448,8 @@ func TestQueryValuePrefix(t *testing.T) {
 }
 
 func TestQueryValueNested(t *testing.T) {
-	result := rewriteQueryValue(map[string]interface{}{
+	proxyHandler, _ := newProxyWithServer(t, config.Default())
+	result := proxyHandler.rewriteQueryValue(map[string]interface{}{
 		"bool": map[string]interface{}{
 			"must": []interface{}{
 				map[string]interface{}{"match": map[string]interface{}{"field1": "value"}},
@@ -3424,14 +3467,16 @@ func TestQueryValueNested(t *testing.T) {
 }
 
 func TestRewriteFieldListNonList(t *testing.T) {
-	result := rewriteFieldList("not a list", "orders")
+	proxyHandler, _ := newProxyWithServer(t, config.Default())
+	result := proxyHandler.rewriteFieldList("not a list", "orders")
 	if result != "not a list" {
 		t.Fatalf("expected unchanged value, got %v", result)
 	}
 }
 
 func TestRewriteFieldListMixedTypes(t *testing.T) {
-	result := rewriteFieldList([]interface{}{"field1", 123, "field2"}, "orders")
+	proxyHandler, _ := newProxyWithServer(t, config.Default())
+	result := proxyHandler.rewriteFieldList([]interface{}{"field1", 123, "field2"}, "orders")
 	list := result.([]interface{})
 	if list[0].(string) != "orders.field1" {
 		t.Fatalf("expected orders.field1, got %v", list[0])

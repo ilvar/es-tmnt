@@ -15,11 +15,13 @@ const (
 	envAdminPort                   = "ES_TMNT_ADMIN_PORT"
 	envUpstreamURL                 = "ES_TMNT_UPSTREAM_URL"
 	envMode                        = "ES_TMNT_MODE"
+	envVerbose                     = "ES_TMNT_VERBOSE"
 	envPassthroughPaths            = "ES_TMNT_PASSTHROUGH_PATHS"
 	envTenantRegexPattern          = "ES_TMNT_TENANT_REGEX_PATTERN"
 	envSharedIndexName             = "ES_TMNT_SHARED_INDEX_NAME"
 	envSharedIndexAliasTemplate    = "ES_TMNT_SHARED_INDEX_ALIAS_TEMPLATE"
 	envSharedIndexTenantField      = "ES_TMNT_SHARED_INDEX_TENANT_FIELD"
+	envSharedIndexDenyPatterns     = "ES_TMNT_SHARED_INDEX_DENY_PATTERNS"
 	envIndexPerTenantIndexTemplate = "ES_TMNT_INDEX_PER_TENANT_TEMPLATE"
 )
 
@@ -40,10 +42,12 @@ func Load() (Config, error) {
 	overrideInt(envAdminPort, &cfg.Ports.Admin)
 	overrideString(envUpstreamURL, &cfg.UpstreamURL)
 	overrideString(envMode, &cfg.Mode)
+	overrideBool(envVerbose, &cfg.Verbose)
 	overrideString(envTenantRegexPattern, &cfg.TenantRegex.Pattern)
 	overrideString(envSharedIndexName, &cfg.SharedIndex.Name)
 	overrideString(envSharedIndexAliasTemplate, &cfg.SharedIndex.AliasTemplate)
 	overrideString(envSharedIndexTenantField, &cfg.SharedIndex.TenantField)
+	overrideStringSlice(envSharedIndexDenyPatterns, &cfg.SharedIndex.DenyPatterns)
 	overrideString(envIndexPerTenantIndexTemplate, &cfg.IndexPerTenant.IndexTemplate)
 	overridePassthrough(envPassthroughPaths, &cfg.PassthroughPaths)
 
@@ -56,6 +60,7 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("tenant_regex.pattern is invalid: %w", err)
 	}
 	cfg.TenantRegex.Compiled = compiled
+	cfg.SharedIndex.DenyCompiled = compilePatterns(cfg.SharedIndex.DenyPatterns)
 
 	return cfg, nil
 }
@@ -94,4 +99,34 @@ func overridePassthrough(key string, target *[]string) {
 		}
 		*target = result
 	}
+}
+
+func overrideStringSlice(key string, target *[]string) {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		parts := strings.Split(value, ",")
+		result := make([]string, 0, len(parts))
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		*target = result
+	}
+}
+
+func compilePatterns(patterns []string) []*regexp.Regexp {
+	if len(patterns) == 0 {
+		return nil
+	}
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	for _, pattern := range patterns {
+		if pattern == "" {
+			continue
+		}
+		if re, err := regexp.Compile(pattern); err == nil {
+			compiled = append(compiled, re)
+		}
+	}
+	return compiled
 }
