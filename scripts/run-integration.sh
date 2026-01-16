@@ -35,7 +35,7 @@ run_mode() {
     ALIAS_TEMPLATE=$(grep '^ES_TMNT_SHARED_INDEX_ALIAS_TEMPLATE=' "${ROOT_DIR}/${env_file}" | cut -d'=' -f2-) \
     TENANT_FIELD=$(grep '^ES_TMNT_SHARED_INDEX_TENANT_FIELD=' "${ROOT_DIR}/${env_file}" | cut -d'=' -f2-) \
     REAL_INDEX=$(grep '^ES_TMNT_INDEX_PER_TENANT_TEMPLATE=' "${ROOT_DIR}/${env_file}" | cut -d'=' -f2-) \
-    go test ./tests -run "${test_name}" -coverprofile "coverage/integration-${mode}.out" -coverpkg=./... && \
+    go test -v ./tests -run "${test_name}" -coverprofile "coverage/integration-${mode}.out" -coverpkg=./... && \
     go tool cover -func "coverage/integration-${mode}.out")
 
   docker compose -f "${ROOT_DIR}/docker-compose.yml" --env-file "${ROOT_DIR}/${env_file}" down -v
