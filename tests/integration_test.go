@@ -42,18 +42,64 @@ func TestSharedMode(t *testing.T) {
 	request(t, http.MethodPost, esURL+"/_aliases", aliasPayload)
 
 	indexBody := map[string]interface{}{"name": "shoe"}
+	logKeyRequest(t, http.MethodPut, proxyURL+"/"+indexName+"-"+tenant+"/_doc/1", indexBody)
 	request(t, http.MethodPut, proxyURL+"/"+indexName+"-"+tenant+"/_doc/1", indexBody)
 
 	searchBody := map[string]interface{}{"query": map[string]interface{}{"match": map[string]interface{}{"name": "shoe"}}}
+	logKeyRequest(t, http.MethodPost, proxyURL+"/"+indexName+"-"+tenant+"/_search", searchBody)
 	searchResp := request(t, http.MethodPost, proxyURL+"/"+indexName+"-"+tenant+"/_search", searchBody)
 	if hitsTotal(searchResp) < 1 {
 		t.Fatalf("expected search results, got %v", searchResp)
 	}
 
+	logKeyRequest(t, http.MethodGet, esURL+"/"+indexName+"/_doc/1", nil)
 	docResp := request(t, http.MethodGet, esURL+"/"+indexName+"/_doc/1", nil)
 	source := extractSource(t, docResp)
 	if source[tenantField] != tenant {
 		t.Fatalf("expected tenant field %s, got %v", tenantField, source)
+	}
+}
+
+func TestSharedModeUpdate(t *testing.T) {
+	if os.Getenv("TEST_MODE") != "shared" {
+		t.Skip("shared mode test skipped")
+	}
+	proxyURL := mustEnv(t, "PROXY_URL")
+	esURL := mustEnv(t, "ES_URL")
+	aliasTemplate := mustEnv(t, "ALIAS_TEMPLATE")
+	tenantField := mustEnv(t, "TENANT_FIELD")
+	indexName := "catalog"
+	tenant := "tenant3"
+	aliasName := renderAlias(t, aliasTemplate, indexName, tenant)
+
+	cleanupIndex(t, esURL, indexName)
+	cleanupAlias(t, esURL, aliasName)
+
+	request(t, http.MethodPut, esURL+"/"+indexName, nil)
+	aliasPayload := map[string]interface{}{
+		"actions": []map[string]interface{}{
+			{"add": map[string]interface{}{
+				"index":  indexName,
+				"alias":  aliasName,
+				"filter": map[string]interface{}{"term": map[string]interface{}{tenantField: tenant}},
+			}},
+		},
+	}
+	request(t, http.MethodPost, esURL+"/_aliases", aliasPayload)
+
+	indexBody := map[string]interface{}{"name": "bag"}
+	logKeyRequest(t, http.MethodPut, proxyURL+"/"+indexName+"-"+tenant+"/_doc/42", indexBody)
+	request(t, http.MethodPut, proxyURL+"/"+indexName+"-"+tenant+"/_doc/42", indexBody)
+
+	updateBody := map[string]interface{}{"doc": map[string]interface{}{"name": "bag-updated"}}
+	logKeyRequest(t, http.MethodPost, proxyURL+"/"+indexName+"-"+tenant+"/_update/42", updateBody)
+	request(t, http.MethodPost, proxyURL+"/"+indexName+"-"+tenant+"/_update/42", updateBody)
+
+	logKeyRequest(t, http.MethodGet, esURL+"/"+indexName+"/_doc/42", nil)
+	docResp := request(t, http.MethodGet, esURL+"/"+indexName+"/_doc/42", nil)
+	source := extractSource(t, docResp)
+	if source["name"] != "bag-updated" || source[tenantField] != tenant {
+		t.Fatalf("expected updated doc with tenant, got %v", source)
 	}
 }
 
@@ -70,8 +116,10 @@ func TestPerTenantMode(t *testing.T) {
 	cleanupIndex(t, esURL, realIndex)
 
 	indexBody := map[string]interface{}{"field1": "value"}
+	logKeyRequest(t, http.MethodPut, proxyURL+"/"+indexName+"-"+tenant+"/_doc/1", indexBody)
 	request(t, http.MethodPut, proxyURL+"/"+indexName+"-"+tenant+"/_doc/1", indexBody)
 
+	logKeyRequest(t, http.MethodGet, esURL+"/"+realIndex+"/_doc/1", nil)
 	docResp := request(t, http.MethodGet, esURL+"/"+realIndex+"/_doc/1", nil)
 	source := extractSource(t, docResp)
 	if _, ok := source[indexName]; !ok {
@@ -79,9 +127,39 @@ func TestPerTenantMode(t *testing.T) {
 	}
 
 	searchBody := map[string]interface{}{"query": map[string]interface{}{"match": map[string]interface{}{"field1": "value"}}}
+	logKeyRequest(t, http.MethodPost, proxyURL+"/"+indexName+"-"+tenant+"/_search", searchBody)
 	searchResp := request(t, http.MethodPost, proxyURL+"/"+indexName+"-"+tenant+"/_search", searchBody)
 	if hitsTotal(searchResp) < 1 {
 		t.Fatalf("expected search results, got %v", searchResp)
+	}
+}
+
+func TestPerTenantModeUpdate(t *testing.T) {
+	if os.Getenv("TEST_MODE") != "per-tenant" {
+		t.Skip("per-tenant mode test skipped")
+	}
+	proxyURL := mustEnv(t, "PROXY_URL")
+	esURL := mustEnv(t, "ES_URL")
+	realIndex := mustEnv(t, "REAL_INDEX")
+	indexName := "invoices"
+	tenant := "tenant4"
+
+	cleanupIndex(t, esURL, realIndex)
+
+	indexBody := map[string]interface{}{"field1": "initial"}
+	logKeyRequest(t, http.MethodPut, proxyURL+"/"+indexName+"-"+tenant+"/_doc/7", indexBody)
+	request(t, http.MethodPut, proxyURL+"/"+indexName+"-"+tenant+"/_doc/7", indexBody)
+
+	updateBody := map[string]interface{}{"doc": map[string]interface{}{"field1": "updated"}}
+	logKeyRequest(t, http.MethodPost, proxyURL+"/"+indexName+"-"+tenant+"/_update/7", updateBody)
+	request(t, http.MethodPost, proxyURL+"/"+indexName+"-"+tenant+"/_update/7", updateBody)
+
+	logKeyRequest(t, http.MethodGet, esURL+"/"+realIndex+"/_doc/7", nil)
+	docResp := request(t, http.MethodGet, esURL+"/"+realIndex+"/_doc/7", nil)
+	source := extractSource(t, docResp)
+	wrapped, ok := source[indexName].(map[string]interface{})
+	if !ok || wrapped["field1"] != "updated" {
+		t.Fatalf("expected nested updated doc, got %v", source)
 	}
 }
 
@@ -117,6 +195,18 @@ func request(t *testing.T, method, url string, body interface{}) responseBody {
 		return responseBody{}
 	}
 	return decoded
+}
+
+func logKeyRequest(t *testing.T, method, url string, body interface{}) {
+	var payload string
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal body for log: %v", err)
+		}
+		payload = string(encoded)
+	}
+	fmt.Printf("key request: method=%s endpoint=%s payload=%s\n", method, url, payload)
 }
 
 func hitsTotal(body responseBody) int {
