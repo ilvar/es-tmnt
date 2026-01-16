@@ -339,6 +339,7 @@ func (p *Proxy) handleDoc(w http.ResponseWriter, r *http.Request, index string) 
 		p.reject(w, "unsupported method for _doc")
 		return
 	}
+	p.ensureRefreshWaitFor(r)
 	baseIndex, tenantID, err := p.parseIndex(index)
 	if err != nil {
 		p.reject(w, err.Error())
@@ -381,6 +382,7 @@ func (p *Proxy) handleUpdate(w http.ResponseWriter, r *http.Request, index strin
 		p.reject(w, "unsupported method for _update")
 		return
 	}
+	p.ensureRefreshWaitFor(r)
 	baseIndex, tenantID, err := p.parseIndex(index)
 	if err != nil {
 		p.reject(w, err.Error())
@@ -562,6 +564,7 @@ func (p *Proxy) handleBulk(w http.ResponseWriter, r *http.Request, index string)
 		p.reject(w, "unsupported method for bulk")
 		return
 	}
+	p.ensureRefreshWaitFor(r)
 	if r.Body == nil {
 		p.reject(w, "missing body")
 		return
@@ -1030,6 +1033,16 @@ func (p *Proxy) rewriteIndexQueryParam(r *http.Request, key string) (string, err
 	r.URL.RawQuery = q.Encode()
 	r.RequestURI = r.URL.RequestURI()
 	return targetIndex, nil
+}
+
+func (p *Proxy) ensureRefreshWaitFor(r *http.Request) {
+	q := r.URL.Query()
+	if strings.TrimSpace(q.Get("refresh")) != "" {
+		return
+	}
+	q.Set("refresh", "wait_for")
+	r.URL.RawQuery = q.Encode()
+	r.RequestURI = r.URL.RequestURI()
 }
 
 func (p *Proxy) rewriteQueryRequest(r *http.Request, baseIndex string) error {
