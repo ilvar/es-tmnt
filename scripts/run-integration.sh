@@ -38,6 +38,9 @@ run_mode() {
     go test -v ./tests -run "${test_name}" -coverprofile "coverage/integration-${mode}.out" -coverpkg=./... && \
     go tool cover -func "coverage/integration-${mode}.out")
 
+  echo "Proxy logs for ${mode} mode"
+  docker compose -f "${ROOT_DIR}/docker-compose.yml" --env-file "${ROOT_DIR}/${env_file}" logs --no-color proxy
+
   docker compose -f "${ROOT_DIR}/docker-compose.yml" --env-file "${ROOT_DIR}/${env_file}" down -v
 }
 

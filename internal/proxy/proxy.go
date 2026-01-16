@@ -1119,6 +1119,7 @@ func (p *Proxy) parseIndex(index string) (string, string, error) {
 	if baseIndex == "" || tenantID == "" {
 		return "", "", fmt.Errorf("invalid index '%s'", index)
 	}
+	p.logVerbose("index parse: %s -> base=%s tenant=%s", index, baseIndex, tenantID)
 	return baseIndex, tenantID, nil
 }
 
