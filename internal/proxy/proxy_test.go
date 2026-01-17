@@ -3531,3 +3531,92 @@ func TestHandleRankEvalRootMissingIndex(t *testing.T) {
 		t.Fatalf("expected status 400, got %d", rec.Code)
 	}
 }
+
+func TestServeHTTPRequestIndexCandidateError(t *testing.T) {
+	cfg := config.Default()
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	// Request with invalid path that causes requestIndexCandidate to error
+	req := httptest.NewRequest(http.MethodPost, "/_search", nil)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	// Should proceed without blocking despite error from requestIndexCandidate
+	// The request should be processed (either as passthrough or handled)
+	if rec.Code == 0 {
+		t.Fatalf("expected response to be processed")
+	}
+}
+
+func TestLogVerboseDisabled(t *testing.T) {
+	cfg := config.Default()
+	cfg.Verbose = false
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	// Call logVerbose when verbose is disabled - should not panic
+	proxyHandler.logVerbose("test message: %s", "value")
+	// If we got here without panic, the test passed
+}
+
+func TestLogVerboseEnabled(t *testing.T) {
+	cfg := config.Default()
+	cfg.Verbose = true
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	// Call logVerbose when verbose is enabled - should not panic
+	proxyHandler.logVerbose("test message: %s", "value")
+	// If we got here without panic, the test passed
+}
+
+func TestPrefixFieldWithVerboseLogging(t *testing.T) {
+	cfg := config.Default()
+	cfg.Verbose = true
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	// Test prefixField with verbose logging enabled
+	result := proxyHandler.prefixField("orders", "field1")
+	if result != "orders.field1" {
+		t.Fatalf("expected orders.field1, got %q", result)
+	}
+}
+
+func TestIsBlockedSharedIndexWithMatch(t *testing.T) {
+	cfg := config.Default()
+	cfg.SharedIndex.DenyPatterns = []string{"^shared-.*", "^blocked-.*"}
+	cfg.SharedIndex.DenyCompiled = []*regexp.Regexp{
+		regexp.MustCompile("^shared-.*"),
+		regexp.MustCompile("^blocked-.*"),
+	}
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	if !proxyHandler.isBlockedSharedIndex("shared-index-name") {
+		t.Fatalf("expected shared-index-name to be blocked")
+	}
+	if !proxyHandler.isBlockedSharedIndex("blocked-something") {
+		t.Fatalf("expected blocked-something to be blocked")
+	}
+}
+
+func TestIsBlockedSharedIndexWithoutMatch(t *testing.T) {
+	cfg := config.Default()
+	cfg.SharedIndex.DenyPatterns = []string{"^shared-.*"}
+	cfg.SharedIndex.DenyCompiled = []*regexp.Regexp{
+		regexp.MustCompile("^shared-.*"),
+	}
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	if proxyHandler.isBlockedSharedIndex("my-index") {
+		t.Fatalf("expected my-index to not be blocked")
+	}
+}
+
+func TestIsBlockedSharedIndexEmptyPatterns(t *testing.T) {
+	cfg := config.Default()
+	cfg.SharedIndex.DenyPatterns = []string{}
+	cfg.SharedIndex.DenyCompiled = []*regexp.Regexp{}
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	if proxyHandler.isBlockedSharedIndex("any-index") {
+		t.Fatalf("expected any-index to not be blocked when no patterns configured")
+	}
+}

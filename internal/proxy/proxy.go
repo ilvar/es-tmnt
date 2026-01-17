@@ -82,7 +82,10 @@ func New(cfg config.Config) (*Proxy, error) {
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if indexName, err := p.requestIndexCandidate(r); err == nil && indexName != "" && p.isSharedIndexAccess(indexName) {
+	indexName, err := p.requestIndexCandidate(r)
+	if err != nil {
+		// Non-fatal: if we cannot determine an index candidate, proceed without shared index check.
+	} else if indexName != "" && p.isBlockedSharedIndex(indexName) {
 		p.logRequest(r, requestCategoryShared, indexName)
 		p.setResponseMode(w, responseModeHandled)
 		p.reject(w, "direct access to shared indices is not allowed")
@@ -1095,7 +1098,7 @@ func (p *Proxy) setPathSegments(r *http.Request, segments []string) {
 }
 
 func (p *Proxy) parseIndex(index string) (string, string, error) {
-	if p.isSharedIndexAccess(index) {
+	if p.isBlockedSharedIndex(index) {
 		return "", "", fmt.Errorf("direct access to shared indices is not allowed")
 	}
 	matches := p.cfg.TenantRegex.Compiled.FindStringSubmatch(index)
@@ -1344,7 +1347,7 @@ func (p *Proxy) requestCategory(r *http.Request) (string, string) {
 	if err != nil {
 		return requestCategoryTenanted, ""
 	}
-	if indexName != "" && p.isSharedIndexAccess(indexName) {
+	if indexName != "" && p.isBlockedSharedIndex(indexName) {
 		return requestCategoryShared, indexName
 	}
 	return requestCategoryTenanted, indexName
@@ -1427,7 +1430,7 @@ func (p *Proxy) logVerbose(format string, args ...interface{}) {
 	log.Printf("verbose: "+format, args...)
 }
 
-func (p *Proxy) isSharedIndexAccess(indexName string) bool {
+func (p *Proxy) isBlockedSharedIndex(indexName string) bool {
 	for _, pattern := range p.denyPatterns {
 		if pattern != nil && pattern.MatchString(indexName) {
 			return true

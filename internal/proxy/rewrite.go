@@ -501,7 +501,9 @@ func (p *Proxy) prefixField(baseIndex, field string) string {
 		return field
 	}
 	rewritten := baseIndex + "." + field
-	p.logVerbose("field rewrite: %s -> %s", field, rewritten)
+	if p.cfg.Verbose {
+		p.logVerbose("field rewrite: %s -> %s", field, rewritten)
+	}
 	return rewritten
 }
 
