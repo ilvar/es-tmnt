@@ -25,6 +25,7 @@ func TestSharedMode(t *testing.T) {
 	indexName := "products"
 	tenant := "tenant1"
 	aliasName := renderAlias(t, aliasTemplate, indexName, tenant)
+	logIndexMapping(t, indexName+"-"+tenant, indexName)
 
 	cleanupIndex(t, esURL, indexName)
 	cleanupAlias(t, esURL, aliasName)
@@ -71,6 +72,7 @@ func TestSharedModeUpdate(t *testing.T) {
 	indexName := "catalog"
 	tenant := "tenant3"
 	aliasName := renderAlias(t, aliasTemplate, indexName, tenant)
+	logIndexMapping(t, indexName+"-"+tenant, indexName)
 
 	cleanupIndex(t, esURL, indexName)
 	cleanupAlias(t, esURL, aliasName)
@@ -112,6 +114,7 @@ func TestPerTenantMode(t *testing.T) {
 	realIndex := mustEnv(t, "REAL_INDEX")
 	indexName := "orders"
 	tenant := "tenant2"
+	logIndexMapping(t, indexName+"-"+tenant, realIndex)
 
 	cleanupIndex(t, esURL, realIndex)
 
@@ -143,6 +146,7 @@ func TestPerTenantModeUpdate(t *testing.T) {
 	realIndex := mustEnv(t, "REAL_INDEX")
 	indexName := "invoices"
 	tenant := "tenant4"
+	logIndexMapping(t, indexName+"-"+tenant, realIndex)
 
 	cleanupIndex(t, esURL, realIndex)
 
@@ -207,6 +211,11 @@ func logKeyRequest(t *testing.T, method, url string, body interface{}) {
 		payload = string(encoded)
 	}
 	fmt.Printf("key request: method=%s endpoint=%s payload=%s\n", method, url, payload)
+}
+
+func logIndexMapping(t *testing.T, tenantedIndex, sharedIndex string) {
+	t.Helper()
+	fmt.Printf("index mapping: tenanted=%s shared=%s\n", tenantedIndex, sharedIndex)
 }
 
 func hitsTotal(body responseBody) int {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -14,11 +13,6 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config error: %v", err)
-	}
-	if payload, err := json.MarshalIndent(cfg, "", "  "); err == nil {
-		log.Printf("loaded config (mode=%s): %s", cfg.Mode, string(payload))
-	} else {
-		log.Printf("config marshal error: %v", err)
 	}
 	service, err := proxy.New(cfg)
 	if err != nil {
