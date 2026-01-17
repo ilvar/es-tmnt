@@ -730,3 +730,35 @@ func TestLoadEnvOverridesConfigFile(t *testing.T) {
 		t.Fatalf("expected URL from file, got %q", cfg.UpstreamURL)
 	}
 }
+
+func TestCompilePatternsWithEmptyStrings(t *testing.T) {
+	patterns := []string{"^valid.*", "", "another-valid"}
+	compiled := compilePatterns(patterns)
+	if len(compiled) != 2 {
+		t.Fatalf("expected 2 compiled patterns (empty string should be skipped), got %d", len(compiled))
+	}
+}
+
+func TestCompilePatternsWithInvalidRegex(t *testing.T) {
+	patterns := []string{"^valid.*", "[invalid", "another-valid"}
+	compiled := compilePatterns(patterns)
+	// Should skip the invalid pattern and compile the 2 valid ones
+	if len(compiled) != 2 {
+		t.Fatalf("expected 2 compiled patterns (invalid regex should be skipped), got %d", len(compiled))
+	}
+}
+
+func TestCompilePatternsWithEmptySlice(t *testing.T) {
+	patterns := []string{}
+	compiled := compilePatterns(patterns)
+	if compiled != nil {
+		t.Fatalf("expected nil for empty patterns slice")
+	}
+}
+
+func TestCompilePatternsWithNil(t *testing.T) {
+	compiled := compilePatterns(nil)
+	if compiled != nil {
+		t.Fatalf("expected nil for nil patterns slice")
+	}
+}
