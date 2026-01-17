@@ -55,8 +55,8 @@ func TestSharedMode(t *testing.T) {
 		t.Fatalf("expected search results, got %v", searchResp)
 	}
 
-	logKeyRequest(t, http.MethodGet, proxyURL+"/"+indexName+"-"+tenant+"/_doc/1", nil)
-	proxySource := fetchSource(t, proxyURL+"/"+indexName+"-"+tenant+"/_doc/1")
+	logKeyRequest(t, http.MethodGet, proxyURL+"/"+indexName+"-"+tenant+"/_get/1", nil)
+	proxySource := fetchSource(t, proxyURL+"/"+indexName+"-"+tenant+"/_get/1")
 	logKeyRequest(t, http.MethodGet, esURL+"/"+indexName+"/_doc/1", nil)
 	esSource := fetchSource(t, esURL+"/"+indexName+"/_doc/1")
 	logObjectComparison(t, "GET", proxySource, esSource)
@@ -106,8 +106,8 @@ func TestSharedModeUpdate(t *testing.T) {
 	esUpdated := fetchSource(t, esURL+"/"+indexName+"/_doc/42")
 	logObjectSaved(t, "POST", esUpdated)
 
-	logKeyRequest(t, http.MethodGet, proxyURL+"/"+indexName+"-"+tenant+"/_doc/42", nil)
-	proxySource := fetchSource(t, proxyURL+"/"+indexName+"-"+tenant+"/_doc/42")
+	logKeyRequest(t, http.MethodGet, proxyURL+"/"+indexName+"-"+tenant+"/_get/42", nil)
+	proxySource := fetchSource(t, proxyURL+"/"+indexName+"-"+tenant+"/_get/42")
 	logKeyRequest(t, http.MethodGet, esURL+"/"+indexName+"/_doc/42", nil)
 	esSource := fetchSource(t, esURL+"/"+indexName+"/_doc/42")
 	logObjectComparison(t, "GET", proxySource, esSource)
@@ -136,8 +136,8 @@ func TestPerTenantMode(t *testing.T) {
 	esIndexed := fetchSource(t, esURL+"/"+realIndex+"/_doc/1")
 	logObjectSaved(t, "PUT", esIndexed)
 
-	logKeyRequest(t, http.MethodGet, proxyURL+"/"+indexName+"-"+tenant+"/_doc/1", nil)
-	proxySource := fetchSource(t, proxyURL+"/"+indexName+"-"+tenant+"/_doc/1")
+	logKeyRequest(t, http.MethodGet, proxyURL+"/"+indexName+"-"+tenant+"/_get/1", nil)
+	proxySource := fetchSource(t, proxyURL+"/"+indexName+"-"+tenant+"/_get/1")
 	logKeyRequest(t, http.MethodGet, esURL+"/"+realIndex+"/_doc/1", nil)
 	esSource := fetchSource(t, esURL+"/"+realIndex+"/_doc/1")
 	logObjectComparison(t, "GET", proxySource, esSource)
@@ -179,8 +179,8 @@ func TestPerTenantModeUpdate(t *testing.T) {
 	esUpdated := fetchSource(t, esURL+"/"+realIndex+"/_doc/7")
 	logObjectSaved(t, "POST", esUpdated)
 
-	logKeyRequest(t, http.MethodGet, proxyURL+"/"+indexName+"-"+tenant+"/_doc/7", nil)
-	proxySource := fetchSource(t, proxyURL+"/"+indexName+"-"+tenant+"/_doc/7")
+	logKeyRequest(t, http.MethodGet, proxyURL+"/"+indexName+"-"+tenant+"/_get/7", nil)
+	proxySource := fetchSource(t, proxyURL+"/"+indexName+"-"+tenant+"/_get/7")
 	logKeyRequest(t, http.MethodGet, esURL+"/"+realIndex+"/_doc/7", nil)
 	esSource := fetchSource(t, esURL+"/"+realIndex+"/_doc/7")
 	logObjectComparison(t, "GET", proxySource, esSource)
