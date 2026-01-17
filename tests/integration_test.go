@@ -291,7 +291,30 @@ func hitsTotal(body responseBody) int {
 func extractSource(t *testing.T, body responseBody) map[string]interface{} {
 	source, ok := body["_source"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("missing _source in response: %v", body)
+		source = extractSourceFromHits(body)
+		if source == nil {
+			t.Fatalf("missing _source in response: %v", body)
+		}
+	}
+	return source
+}
+
+func extractSourceFromHits(body responseBody) map[string]interface{} {
+	hitsValue, ok := body["hits"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	hitsList, ok := hitsValue["hits"].([]interface{})
+	if !ok || len(hitsList) == 0 {
+		return nil
+	}
+	firstHit, ok := hitsList[0].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	source, ok := firstHit["_source"].(map[string]interface{})
+	if !ok {
+		return nil
 	}
 	return source
 }
