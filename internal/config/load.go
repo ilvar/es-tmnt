@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"strconv"
@@ -102,17 +103,7 @@ func overridePassthrough(key string, target *[]string) {
 }
 
 func overrideStringSlice(key string, target *[]string) {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		parts := strings.Split(value, ",")
-		result := make([]string, 0, len(parts))
-		for _, part := range parts {
-			trimmed := strings.TrimSpace(part)
-			if trimmed != "" {
-				result = append(result, trimmed)
-			}
-		}
-		*target = result
-	}
+	overridePassthrough(key, target)
 }
 
 func compilePatterns(patterns []string) []*regexp.Regexp {
@@ -124,9 +115,12 @@ func compilePatterns(patterns []string) []*regexp.Regexp {
 		if pattern == "" {
 			continue
 		}
-		if re, err := regexp.Compile(pattern); err == nil {
-			compiled = append(compiled, re)
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			log.Printf("warning: failed to compile regex pattern %q: %v", pattern, err)
+			continue
 		}
+		compiled = append(compiled, re)
 	}
 	return compiled
 }
