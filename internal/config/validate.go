@@ -61,6 +61,16 @@ func (c Config) Validate() error {
 		}
 	}
 
+	for i, pattern := range c.SharedIndex.DenyPatterns {
+		trimmed := strings.TrimSpace(pattern)
+		if trimmed == "" {
+			return fmt.Errorf("shared_index.deny_patterns[%d] must not be empty", i)
+		}
+		if _, err := regexp.Compile(trimmed); err != nil {
+			return fmt.Errorf("shared_index.deny_patterns[%d] is invalid: %w", i, err)
+		}
+	}
+
 	if mode == "index-per-tenant" {
 		if strings.TrimSpace(c.IndexPerTenant.IndexTemplate) == "" {
 			return fmt.Errorf("index_per_tenant.index_template is required in index-per-tenant mode")

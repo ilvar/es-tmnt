@@ -23,6 +23,7 @@ func TestLoadUsesConfigFileAndEnvOverrides(t *testing.T) {
 			Name:          "shared-{{.index}}",
 			AliasTemplate: "alias-{{.index}}-{{.tenant}}",
 			TenantField:   "tenant_id",
+			DenyPatterns:  []string{"^shared-.*$"},
 		},
 		IndexPerTenant: IndexPerTenant{
 			IndexTemplate: "per-{{.tenant}}",
@@ -62,6 +63,9 @@ func TestLoadUsesConfigFileAndEnvOverrides(t *testing.T) {
 	}
 	if cfg.TenantRegex.Compiled == nil {
 		t.Fatalf("expected compiled tenant regex")
+	}
+	if len(cfg.SharedIndex.DenyCompiled) != 1 {
+		t.Fatalf("expected compiled deny patterns, got %d", len(cfg.SharedIndex.DenyCompiled))
 	}
 }
 
@@ -163,6 +167,20 @@ func TestValidateErrors(t *testing.T) {
 				cfg.IndexPerTenant.IndexTemplate = ""
 			},
 			wantErr: "index_per_tenant.index_template is required",
+		},
+		{
+			name: "empty shared index deny pattern",
+			mutate: func(cfg *Config) {
+				cfg.SharedIndex.DenyPatterns = []string{""}
+			},
+			wantErr: "shared_index.deny_patterns[0] must not be empty",
+		},
+		{
+			name: "invalid shared index deny pattern",
+			mutate: func(cfg *Config) {
+				cfg.SharedIndex.DenyPatterns = []string{"[invalid"}
+			},
+			wantErr: "shared_index.deny_patterns[0] is invalid",
 		},
 	}
 
@@ -304,6 +322,18 @@ func TestOverridePassthroughEmptyParts(t *testing.T) {
 	}
 }
 
+func TestOverrideStringSlice(t *testing.T) {
+	t.Setenv(envSharedIndexDenyPatterns, "^shared-.*,shared-index")
+	var target []string
+	overrideStringSlice(envSharedIndexDenyPatterns, &target)
+	if len(target) != 2 {
+		t.Fatalf("expected 2 patterns, got %d", len(target))
+	}
+	if target[0] != "^shared-.*" {
+		t.Fatalf("expected ^shared-.*, got %q", target[0])
+	}
+}
+
 func TestLoadInvalidJSON(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(configPath, []byte("invalid json"), 0o600); err != nil {
@@ -325,10 +355,12 @@ func TestLoadEnvOverridesAllFields(t *testing.T) {
 	t.Setenv(envAdminPort, "9202")
 	t.Setenv(envUpstreamURL, "http://test.com")
 	t.Setenv(envMode, "shared")
+	t.Setenv(envVerbose, "true")
 	t.Setenv(envTenantRegexPattern, `^(?P<prefix>[^-]+)-(?P<tenant>[^-]+)(?P<postfix>.*)$`)
 	t.Setenv(envSharedIndexName, "shared-{{.index}}")
 	t.Setenv(envSharedIndexAliasTemplate, "alias-{{.index}}-{{.tenant}}")
 	t.Setenv(envSharedIndexTenantField, "tenant_id")
+	t.Setenv(envSharedIndexDenyPatterns, "^shared-.*$")
 	t.Setenv(envIndexPerTenantIndexTemplate, "per-{{.tenant}}")
 
 	cfg, err := Load()
@@ -346,6 +378,12 @@ func TestLoadEnvOverridesAllFields(t *testing.T) {
 	}
 	if cfg.Mode != "shared" {
 		t.Fatalf("expected shared mode, got %q", cfg.Mode)
+	}
+	if !cfg.Verbose {
+		t.Fatalf("expected verbose to be true")
+	}
+	if len(cfg.SharedIndex.DenyCompiled) != 1 {
+		t.Fatalf("expected deny pattern compiled, got %d", len(cfg.SharedIndex.DenyCompiled))
 	}
 }
 
@@ -384,7 +422,7 @@ func TestValidateIndexPerTenantMode(t *testing.T) {
 	cfg := Default()
 	cfg.Mode = "index-per-tenant"
 	cfg.IndexPerTenant.IndexTemplate = "{{.index}}-{{.tenant}}"
-	
+
 	err := cfg.Validate()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -397,7 +435,7 @@ func TestValidateSharedMode(t *testing.T) {
 	cfg.SharedIndex.Name = "shared-{{.index}}"
 	cfg.SharedIndex.AliasTemplate = "alias-{{.index}}-{{.tenant}}"
 	cfg.SharedIndex.TenantField = "tenant_id"
-	
+
 	err := cfg.Validate()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -407,7 +445,7 @@ func TestValidateSharedMode(t *testing.T) {
 func TestValidatePassthroughPaths(t *testing.T) {
 	cfg := Default()
 	cfg.PassthroughPaths = []string{"/path1", "/path2", "/path3"}
-	
+
 	err := cfg.Validate()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -650,7 +688,7 @@ func TestLoadWithoutConfigFile(t *testing.T) {
 	// Clear config file env var
 	t.Setenv(envConfigPath, "")
 	t.Setenv(envTenantRegexPattern, `^(?P<prefix>[^-]+)-(?P<tenant>[^-]+)(?P<postfix>.*)$`)
-	
+
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("load config: %v", err)
@@ -662,9 +700,9 @@ func TestLoadWithoutConfigFile(t *testing.T) {
 
 func TestLoadEnvOverridesConfigFile(t *testing.T) {
 	sample := Config{
-		Ports: Ports{HTTP: 9201},
+		Ports:       Ports{HTTP: 9201},
 		UpstreamURL: "http://file.example.com",
-		Mode: "shared",
+		Mode:        "shared",
 		TenantRegex: TenantRegex{
 			Pattern: `^(?P<prefix>[^-]+)-(?P<tenant>[^-]+)(?P<postfix>.*)$`,
 		},
@@ -677,10 +715,10 @@ func TestLoadEnvOverridesConfigFile(t *testing.T) {
 	payload, _ := json.Marshal(sample)
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	os.WriteFile(configPath, payload, 0o600)
-	
+
 	t.Setenv(envConfigPath, configPath)
 	t.Setenv(envHTTPPort, "9300") // Override from file
-	
+
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("load config: %v", err)
@@ -690,5 +728,37 @@ func TestLoadEnvOverridesConfigFile(t *testing.T) {
 	}
 	if cfg.UpstreamURL != "http://file.example.com" {
 		t.Fatalf("expected URL from file, got %q", cfg.UpstreamURL)
+	}
+}
+
+func TestCompilePatternsWithEmptyStrings(t *testing.T) {
+	patterns := []string{"^valid.*", "", "another-valid"}
+	compiled := compilePatterns(patterns)
+	if len(compiled) != 2 {
+		t.Fatalf("expected 2 compiled patterns (empty string should be skipped), got %d", len(compiled))
+	}
+}
+
+func TestCompilePatternsWithInvalidRegex(t *testing.T) {
+	patterns := []string{"^valid.*", "[invalid", "another-valid"}
+	compiled := compilePatterns(patterns)
+	// Should skip the invalid pattern and compile the 2 valid ones
+	if len(compiled) != 2 {
+		t.Fatalf("expected 2 compiled patterns (invalid regex should be skipped), got %d", len(compiled))
+	}
+}
+
+func TestCompilePatternsWithEmptySlice(t *testing.T) {
+	patterns := []string{}
+	compiled := compilePatterns(patterns)
+	if compiled != nil {
+		t.Fatalf("expected nil for empty patterns slice")
+	}
+}
+
+func TestCompilePatternsWithNil(t *testing.T) {
+	compiled := compilePatterns(nil)
+	if compiled != nil {
+		t.Fatalf("expected nil for nil patterns slice")
 	}
 }

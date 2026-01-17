@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -97,6 +98,76 @@ func TestRewriteQueryBodyInvalidJSON(t *testing.T) {
 	_, err := proxyHandler.rewriteQueryBody([]byte("{"), "orders")
 	if err == nil || !strings.Contains(err.Error(), "invalid JSON body") {
 		t.Fatalf("expected invalid JSON error, got %v", err)
+	}
+}
+
+func TestRewriteQueryBodyComplex(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "index-per-tenant"
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	body := []byte(`{
+		"query": {
+			"bool": {
+				"must": [
+					{"match": {"field1": "value"}},
+					{"range": {"created_at": {"gte": "now-1d"}}}
+				],
+				"filter": {"term": {"status": "open"}}
+			}
+		},
+		"fields": ["field1", "field2"],
+		"_source": {
+			"includes": ["field1", "nested.field2"],
+			"excludes": ["field3"]
+		},
+		"sort": ["field1", {"field2": {"order": "desc"}}]
+	}`)
+
+	rewritten, err := proxyHandler.rewriteQueryBody(body, "orders")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(rewritten, &payload); err != nil {
+		t.Fatalf("parse rewritten body: %v", err)
+	}
+	query := payload["query"].(map[string]interface{})
+	boolQuery := query["bool"].(map[string]interface{})
+	must := boolQuery["must"].([]interface{})
+	firstMatch := must[0].(map[string]interface{})["match"].(map[string]interface{})
+	if firstMatch["orders.field1"] == nil {
+		t.Fatalf("expected orders.field1 in match query, got %v", firstMatch)
+	}
+	secondRange := must[1].(map[string]interface{})["range"].(map[string]interface{})
+	if secondRange["orders.created_at"] == nil {
+		t.Fatalf("expected orders.created_at in range query, got %v", secondRange)
+	}
+	filter := boolQuery["filter"].(map[string]interface{})["term"].(map[string]interface{})
+	if filter["orders.status"] == nil {
+		t.Fatalf("expected orders.status in filter query, got %v", filter)
+	}
+	fields := payload["fields"].([]interface{})
+	if fields[0].(string) != "orders.field1" || fields[1].(string) != "orders.field2" {
+		t.Fatalf("expected prefixed fields, got %v", fields)
+	}
+	source := payload["_source"].(map[string]interface{})
+	includes := source["includes"].([]interface{})
+	excludes := source["excludes"].([]interface{})
+	if includes[0].(string) != "orders.field1" || includes[1].(string) != "orders.nested.field2" {
+		t.Fatalf("expected prefixed includes, got %v", includes)
+	}
+	if excludes[0].(string) != "orders.field3" {
+		t.Fatalf("expected prefixed excludes, got %v", excludes)
+	}
+	sort := payload["sort"].([]interface{})
+	if sort[0].(string) != "orders.field1" {
+		t.Fatalf("expected prefixed sort field, got %v", sort[0])
+	}
+	sortObj := sort[1].(map[string]interface{})
+	if sortObj["orders.field2"] == nil {
+		t.Fatalf("expected prefixed sort object, got %v", sortObj)
 	}
 }
 

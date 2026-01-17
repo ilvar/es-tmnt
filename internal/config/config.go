@@ -6,6 +6,7 @@ type Config struct {
 	Ports            Ports          `yaml:"ports"`
 	UpstreamURL      string         `yaml:"upstream_url"`
 	Mode             string         `yaml:"mode"`
+	Verbose          bool           `yaml:"verbose"`
 	TenantRegex      TenantRegex    `yaml:"tenant_regex"`
 	SharedIndex      SharedIndex    `yaml:"shared_index"`
 	IndexPerTenant   IndexPerTenant `yaml:"index_per_tenant"`
@@ -23,9 +24,11 @@ type TenantRegex struct {
 }
 
 type SharedIndex struct {
-	Name          string `yaml:"name"`
-	AliasTemplate string `yaml:"alias_template"`
-	TenantField   string `yaml:"tenant_field"`
+	Name          string           `yaml:"name"`
+	AliasTemplate string           `yaml:"alias_template"`
+	TenantField   string           `yaml:"tenant_field"`
+	DenyPatterns  []string         `yaml:"deny_patterns"`
+	DenyCompiled  []*regexp.Regexp `yaml:"-"`
 }
 
 type IndexPerTenant struct {
@@ -40,6 +43,7 @@ func Default() Config {
 		},
 		UpstreamURL: "http://localhost:9200",
 		Mode:        "shared",
+		Verbose:     false,
 		TenantRegex: TenantRegex{
 			Pattern: `^(?P<prefix>[^-]+)-(?P<tenant>[^-]+)(?P<postfix>.*)$`,
 		},

@@ -231,7 +231,7 @@ func (p *Proxy) rewriteQueryBody(body []byte, baseIndex string) ([]byte, error) 
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("invalid JSON body: %w", err)
 	}
-	rewritten := rewriteQueryValue(payload, baseIndex)
+	rewritten := p.rewriteQueryValue(payload, baseIndex)
 	return json.Marshal(rewritten)
 }
 
@@ -364,36 +364,48 @@ func (p *Proxy) rewriteIndexName(index string, aliasForShared bool) (string, err
 	}
 	if isSharedMode(p.cfg.Mode) {
 		if aliasForShared {
-			return p.renderAlias(baseIndex, tenantID)
+			alias, err := p.renderAlias(baseIndex, tenantID)
+			if err == nil && alias != index {
+				p.logVerbose("index rewrite (alias): %s -> %s", index, alias)
+			}
+			return alias, err
 		}
-		return p.renderIndex(p.sharedIndex, baseIndex, tenantID)
+		target, err := p.renderIndex(p.sharedIndex, baseIndex, tenantID)
+		if err == nil && target != index {
+			p.logVerbose("index rewrite (shared): %s -> %s", index, target)
+		}
+		return target, err
 	}
-	return p.renderIndex(p.perTenantIdx, baseIndex, tenantID)
+	target, err := p.renderIndex(p.perTenantIdx, baseIndex, tenantID)
+	if err == nil && target != index {
+		p.logVerbose("index rewrite (per-tenant): %s -> %s", index, target)
+	}
+	return target, err
 }
 
-func rewriteQueryValue(value interface{}, baseIndex string) interface{} {
+func (p *Proxy) rewriteQueryValue(value interface{}, baseIndex string) interface{} {
 	switch typed := value.(type) {
 	case map[string]interface{}:
 		output := make(map[string]interface{}, len(typed))
 		for key, val := range typed {
 			switch key {
 			case "match", "term", "range", "prefix", "wildcard", "regexp":
-				output[key] = rewriteFieldObject(val, baseIndex)
+				output[key] = p.rewriteFieldObject(val, baseIndex)
 			case "fields":
-				output[key] = rewriteFieldList(val, baseIndex)
+				output[key] = p.rewriteFieldList(val, baseIndex)
 			case "sort":
-				output[key] = rewriteSortValue(val, baseIndex)
+				output[key] = p.rewriteSortValue(val, baseIndex)
 			case "_source":
-				output[key] = rewriteSourceFilter(val, baseIndex)
+				output[key] = p.rewriteSourceFilter(val, baseIndex)
 			default:
-				output[key] = rewriteQueryValue(val, baseIndex)
+				output[key] = p.rewriteQueryValue(val, baseIndex)
 			}
 		}
 		return output
 	case []interface{}:
 		items := make([]interface{}, 0, len(typed))
 		for _, item := range typed {
-			items = append(items, rewriteQueryValue(item, baseIndex))
+			items = append(items, p.rewriteQueryValue(item, baseIndex))
 		}
 		return items
 	default:
@@ -401,19 +413,19 @@ func rewriteQueryValue(value interface{}, baseIndex string) interface{} {
 	}
 }
 
-func rewriteFieldObject(value interface{}, baseIndex string) interface{} {
+func (p *Proxy) rewriteFieldObject(value interface{}, baseIndex string) interface{} {
 	obj, ok := value.(map[string]interface{})
 	if !ok {
 		return value
 	}
 	output := make(map[string]interface{}, len(obj))
 	for key, val := range obj {
-		output[prefixField(baseIndex, key)] = rewriteQueryValue(val, baseIndex)
+		output[p.prefixField(baseIndex, key)] = p.rewriteQueryValue(val, baseIndex)
 	}
 	return output
 }
 
-func rewriteFieldList(value interface{}, baseIndex string) interface{} {
+func (p *Proxy) rewriteFieldList(value interface{}, baseIndex string) interface{} {
 	list, ok := value.([]interface{})
 	if !ok {
 		return value
@@ -422,7 +434,7 @@ func rewriteFieldList(value interface{}, baseIndex string) interface{} {
 	for _, item := range list {
 		s, ok := item.(string)
 		if ok {
-			output = append(output, prefixField(baseIndex, s))
+			output = append(output, p.prefixField(baseIndex, s))
 			continue
 		}
 		output = append(output, item)
@@ -430,14 +442,14 @@ func rewriteFieldList(value interface{}, baseIndex string) interface{} {
 	return output
 }
 
-func rewriteSourceFilter(value interface{}, baseIndex string) interface{} {
+func (p *Proxy) rewriteSourceFilter(value interface{}, baseIndex string) interface{} {
 	switch typed := value.(type) {
 	case []interface{}:
 		output := make([]interface{}, 0, len(typed))
 		for _, item := range typed {
 			s, ok := item.(string)
 			if ok {
-				output = append(output, prefixField(baseIndex, s))
+				output = append(output, p.prefixField(baseIndex, s))
 				continue
 			}
 			output = append(output, item)
@@ -446,11 +458,11 @@ func rewriteSourceFilter(value interface{}, baseIndex string) interface{} {
 	case map[string]interface{}:
 		includes, ok := typed["includes"]
 		if ok {
-			typed["includes"] = rewriteSourceFilter(includes, baseIndex)
+			typed["includes"] = p.rewriteSourceFilter(includes, baseIndex)
 		}
 		excludes, ok := typed["excludes"]
 		if ok {
-			typed["excludes"] = rewriteSourceFilter(excludes, baseIndex)
+			typed["excludes"] = p.rewriteSourceFilter(excludes, baseIndex)
 		}
 		return typed
 	default:
@@ -458,7 +470,7 @@ func rewriteSourceFilter(value interface{}, baseIndex string) interface{} {
 	}
 }
 
-func rewriteSortValue(value interface{}, baseIndex string) interface{} {
+func (p *Proxy) rewriteSortValue(value interface{}, baseIndex string) interface{} {
 	list, ok := value.([]interface{})
 	if !ok {
 		return value
@@ -467,11 +479,11 @@ func rewriteSortValue(value interface{}, baseIndex string) interface{} {
 	for _, item := range list {
 		switch typed := item.(type) {
 		case string:
-			output = append(output, prefixField(baseIndex, typed))
+			output = append(output, p.prefixField(baseIndex, typed))
 		case map[string]interface{}:
 			rewritten := make(map[string]interface{}, len(typed))
 			for key, val := range typed {
-				rewritten[prefixField(baseIndex, key)] = rewriteQueryValue(val, baseIndex)
+				rewritten[p.prefixField(baseIndex, key)] = p.rewriteQueryValue(val, baseIndex)
 			}
 			output = append(output, rewritten)
 		default:
@@ -481,14 +493,18 @@ func rewriteSortValue(value interface{}, baseIndex string) interface{} {
 	return output
 }
 
-func prefixField(baseIndex, field string) string {
+func (p *Proxy) prefixField(baseIndex, field string) string {
 	if field == "" {
 		return field
 	}
 	if strings.HasPrefix(field, baseIndex+".") {
 		return field
 	}
-	return baseIndex + "." + field
+	rewritten := baseIndex + "." + field
+	if p.cfg.Verbose {
+		p.logVerbose("field rewrite: %s -> %s", field, rewritten)
+	}
+	return rewritten
 }
 
 func wrapProperties(props map[string]interface{}, baseIndex string) map[string]interface{} {

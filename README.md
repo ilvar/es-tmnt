@@ -128,13 +128,15 @@ Example `config.json`:
   },
   "upstream_url": "http://localhost:9200",
   "mode": "shared",
+  "verbose": false,
   "tenant_regex": {
     "pattern": "^(?P<prefix>[^-]+)-(?P<tenant>[^-]+)(?P<postfix>.*)$"
   },
   "shared_index": {
     "name": "{{.index}}",
     "alias_template": "alias-{{.index}}-{{.tenant}}",
-    "tenant_field": "tenant_id"
+    "tenant_field": "tenant_id",
+    "deny_patterns": ["^shared-index$"]
   },
   "index_per_tenant": {
     "index_template": "{{.index}}-{{.tenant}}"
