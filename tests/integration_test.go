@@ -205,7 +205,10 @@ func request(t *testing.T, method, url string, body interface{}) responseBody {
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
+	req.Header.Set("Accept", "application/json")
 	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	} else {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := client.Do(req)
