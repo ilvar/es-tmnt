@@ -280,6 +280,13 @@ func (p *Proxy) bulkIndexName(meta map[string]interface{}, pathIndex string) (st
 }
 
 func (p *Proxy) rewriteQueryBody(body []byte, baseIndex string) ([]byte, error) {
+	// Use fastjson for better performance
+	return p.rewriteQueryBodyFastJSON(body, baseIndex)
+}
+
+// rewriteQueryBodyStdlib is the original implementation using encoding/json
+// Kept for reference and fallback testing
+func (p *Proxy) rewriteQueryBodyStdlib(body []byte, baseIndex string) ([]byte, error) {
 	if isSharedMode(p.cfg.Mode) {
 		return body, nil
 	}
