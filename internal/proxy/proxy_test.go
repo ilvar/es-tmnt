@@ -2142,7 +2142,7 @@ func TestRollupWithArrayIndexPattern(t *testing.T) {
 	cfg.SharedIndex.Name = "shared-{{.index}}"
 	proxyHandler, capture := newProxyWithServer(t, cfg)
 
-	body := []byte(`{"index_pattern":["logs-tenant1-*","events-tenant1-*"],"rollup_index":"rollup-tenant1"}`)
+	body := []byte(`{"index_pattern":["logs-tenant1","events-tenant1"],"rollup_index":"rollup-tenant1"}`)
 	req := httptest.NewRequest(http.MethodPut, "/_rollup/job/logs", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(rec, req)
@@ -2158,6 +2158,12 @@ func TestRollupWithArrayIndexPattern(t *testing.T) {
 	patterns := payload["index_pattern"].([]interface{})
 	if len(patterns) != 2 {
 		t.Fatalf("expected 2 patterns, got %d", len(patterns))
+	}
+	if patterns[0].(string) != "alias-logs-tenant1" {
+		t.Fatalf("expected alias-logs-tenant1, got %v", patterns[0])
+	}
+	if patterns[1].(string) != "alias-events-tenant1" {
+		t.Fatalf("expected alias-events-tenant1, got %v", patterns[1])
 	}
 }
 
@@ -2866,7 +2872,7 @@ func TestRewriteIndexValueArray(t *testing.T) {
 	proxyHandler, _ := newProxyWithServer(t, cfg)
 
 	value := []interface{}{"orders-tenant1", "products-tenant2"}
-	result, err := proxyHandler.rewriteIndexValue(value, true)
+	result, err := proxyHandler.rewriteIndexValue(value, true, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2887,7 +2893,7 @@ func TestRewriteIndexValueArrayInvalidType(t *testing.T) {
 	proxyHandler, _ := newProxyWithServer(t, cfg)
 
 	value := []interface{}{123}
-	_, err := proxyHandler.rewriteIndexValue(value, true)
+	_, err := proxyHandler.rewriteIndexValue(value, true, false)
 	if err == nil {
 		t.Fatalf("expected error for non-string item")
 	}
@@ -2898,7 +2904,7 @@ func TestRewriteIndexValueInvalidType(t *testing.T) {
 	proxyHandler, _ := newProxyWithServer(t, cfg)
 
 	value := 123
-	_, err := proxyHandler.rewriteIndexValue(value, true)
+	_, err := proxyHandler.rewriteIndexValue(value, true, false)
 	if err == nil {
 		t.Fatalf("expected error for invalid type")
 	}
@@ -2911,7 +2917,7 @@ func TestRewriteIndexValueArrayIndexPerTenant(t *testing.T) {
 	proxyHandler, _ := newProxyWithServer(t, cfg)
 
 	value := []interface{}{"orders-tenant1"}
-	result, err := proxyHandler.rewriteIndexValue(value, false)
+	result, err := proxyHandler.rewriteIndexValue(value, false, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
