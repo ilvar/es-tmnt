@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"regexp/syntax"
 	"strings"
 )
 
@@ -42,6 +43,9 @@ func (c Config) Validate() error {
 		return fmt.Errorf("tenant_regex.pattern must include named capture groups %q, %q, and %q",
 			tenantPrefixGroup, tenantIDGroup, tenantPostfixGroup)
 	}
+	if err := validateRegexComplexity(pattern); err != nil {
+		return err
+	}
 
 	for i, path := range c.PassthroughPaths {
 		if strings.TrimSpace(path) == "" {
@@ -77,5 +81,37 @@ func (c Config) Validate() error {
 		}
 	}
 
+	if c.Auth.Required && strings.TrimSpace(c.Auth.Header) == "" {
+		return fmt.Errorf("auth.header is required when auth.required is true")
+	}
+
 	return nil
+}
+
+func validateRegexComplexity(pattern string) error {
+	parsed, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return fmt.Errorf("tenant_regex.pattern is invalid: %w", err)
+	}
+	if hasNestedQuantifiers(parsed, false) {
+		return fmt.Errorf("tenant_regex.pattern contains nested quantifiers and may be vulnerable to ReDoS")
+	}
+	return nil
+}
+
+func hasNestedQuantifiers(re *syntax.Regexp, inRepeat bool) bool {
+	if re == nil {
+		return false
+	}
+	isRepeat := re.Op == syntax.OpStar || re.Op == syntax.OpPlus || re.Op == syntax.OpQuest || re.Op == syntax.OpRepeat
+	if inRepeat && isRepeat {
+		return true
+	}
+	nextRepeat := inRepeat || isRepeat
+	for _, sub := range re.Sub {
+		if hasNestedQuantifiers(sub, nextRepeat) {
+			return true
+		}
+	}
+	return false
 }

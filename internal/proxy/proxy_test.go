@@ -158,6 +158,22 @@ func TestIndexPerTenantSearchRewrite(t *testing.T) {
 	}
 }
 
+func TestIndexPerTenantRejectsUnsupportedQueryType(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "index-per-tenant"
+	cfg.IndexPerTenant.IndexTemplate = "shared-index"
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	reqBody := []byte(`{"query":{"multi_match":{"query":"test","fields":["field1"]}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/orders-tenant2/_search", bytes.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+}
+
 func TestIndexPerTenantBulkRewrite(t *testing.T) {
 	cfg := config.Default()
 	cfg.Mode = "index-per-tenant"
@@ -195,6 +211,26 @@ func TestIndexPerTenantBulkRewrite(t *testing.T) {
 	}
 	if _, ok := source["orders"]; !ok {
 		t.Fatalf("expected orders wrapper in bulk source, got %v", source)
+	}
+}
+
+func TestBulkRejectsMultipleTenants(t *testing.T) {
+	cfg := config.Default()
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	bulkPayload := strings.Join([]string{
+		`{"index":{"_index":"orders-tenant1"}}`,
+		`{"field":"value1"}`,
+		`{"index":{"_index":"orders-tenant2"}}`,
+		`{"field":"value2"}`,
+		"",
+	}, "\n")
+	req := httptest.NewRequest(http.MethodPost, "/_bulk", strings.NewReader(bulkPayload))
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
 	}
 }
 
@@ -414,6 +450,23 @@ func TestTransformIndexRewrite(t *testing.T) {
 	}
 }
 
+func TestTransformRejectsWildcardSource(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "shared"
+	cfg.SharedIndex.Name = "shared-{{.index}}"
+	cfg.SharedIndex.AliasTemplate = "alias-{{.index}}-{{.tenant}}"
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	body := []byte(`{"source":{"index":"orders-tenant1-*"},"dest":{"index":"stats-tenant1"}}`)
+	req := httptest.NewRequest(http.MethodPut, "/_transform/orders", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+}
+
 func TestAnalyzeIndexRewrite(t *testing.T) {
 	cfg := config.Default()
 	cfg.Mode = "shared"
@@ -443,7 +496,7 @@ func TestRollupIndexPatternRewrite(t *testing.T) {
 	cfg.SharedIndex.Name = "shared-{{.index}}"
 	proxyHandler, capture := newProxyWithServer(t, cfg)
 
-	body := []byte(`{"index_pattern":"logs-tenant1-*","rollup_index":"rollup-tenant1"}`)
+	body := []byte(`{"index_pattern":"logs-tenant1","rollup_index":"rollup-tenant1"}`)
 	req := httptest.NewRequest(http.MethodPut, "/_rollup/job/logs", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(rec, req)
@@ -459,11 +512,28 @@ func TestRollupIndexPatternRewrite(t *testing.T) {
 	if err := json.Unmarshal(capturedBody, &payload); err != nil {
 		t.Fatalf("parse body: %v", err)
 	}
-	if payload["index_pattern"] != "alias-logs-*-tenant1" {
-		t.Fatalf("expected index_pattern alias-logs-*-tenant1, got %v", payload["index_pattern"])
+	if payload["index_pattern"] != "alias-logs-tenant1" {
+		t.Fatalf("expected index_pattern alias-logs-tenant1, got %v", payload["index_pattern"])
 	}
 	if payload["rollup_index"] != "shared-rollup" {
 		t.Fatalf("expected rollup_index shared-rollup, got %v", payload["rollup_index"])
+	}
+}
+
+func TestRollupIndexPatternRejectsWildcards(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "shared"
+	cfg.SharedIndex.AliasTemplate = "alias-{{.index}}-{{.tenant}}"
+	cfg.SharedIndex.Name = "shared-{{.index}}"
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	body := []byte(`{"index_pattern":"logs-tenant1-*","rollup_index":"rollup-tenant1"}`)
+	req := httptest.NewRequest(http.MethodPut, "/_rollup/job/logs", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
 	}
 }
 
@@ -505,6 +575,27 @@ func TestMultiSearchRewrite(t *testing.T) {
 	match := query["match"].(map[string]interface{})
 	if _, ok := match["orders.field1"]; !ok {
 		t.Fatalf("expected field orders.field1 in match, got %v", match)
+	}
+}
+
+func TestMultiSearchRejectsEmptyLines(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mode = "index-per-tenant"
+	cfg.IndexPerTenant.IndexTemplate = "shared-index"
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	body := strings.Join([]string{
+		`{"index":"orders-tenant2"}`,
+		"",
+		`{"query":{"match":{"field1":"value"}}}`,
+		"",
+	}, "\n")
+	req := httptest.NewRequest(http.MethodPost, "/_msearch", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
 	}
 }
 
@@ -2051,7 +2142,7 @@ func TestRollupWithArrayIndexPattern(t *testing.T) {
 	cfg.SharedIndex.Name = "shared-{{.index}}"
 	proxyHandler, capture := newProxyWithServer(t, cfg)
 
-	body := []byte(`{"index_pattern":["logs-tenant1-*","events-tenant1-*"],"rollup_index":"rollup-tenant1"}`)
+	body := []byte(`{"index_pattern":["logs-tenant1","events-tenant1"],"rollup_index":"rollup-tenant1"}`)
 	req := httptest.NewRequest(http.MethodPut, "/_rollup/job/logs", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(rec, req)
@@ -2067,6 +2158,12 @@ func TestRollupWithArrayIndexPattern(t *testing.T) {
 	patterns := payload["index_pattern"].([]interface{})
 	if len(patterns) != 2 {
 		t.Fatalf("expected 2 patterns, got %d", len(patterns))
+	}
+	if patterns[0].(string) != "alias-logs-tenant1" {
+		t.Fatalf("expected alias-logs-tenant1, got %v", patterns[0])
+	}
+	if patterns[1].(string) != "alias-events-tenant1" {
+		t.Fatalf("expected alias-events-tenant1, got %v", patterns[1])
 	}
 }
 
@@ -2775,7 +2872,7 @@ func TestRewriteIndexValueArray(t *testing.T) {
 	proxyHandler, _ := newProxyWithServer(t, cfg)
 
 	value := []interface{}{"orders-tenant1", "products-tenant2"}
-	result, err := proxyHandler.rewriteIndexValue(value, true)
+	result, err := proxyHandler.rewriteIndexValue(value, true, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2796,7 +2893,7 @@ func TestRewriteIndexValueArrayInvalidType(t *testing.T) {
 	proxyHandler, _ := newProxyWithServer(t, cfg)
 
 	value := []interface{}{123}
-	_, err := proxyHandler.rewriteIndexValue(value, true)
+	_, err := proxyHandler.rewriteIndexValue(value, true, false)
 	if err == nil {
 		t.Fatalf("expected error for non-string item")
 	}
@@ -2807,7 +2904,7 @@ func TestRewriteIndexValueInvalidType(t *testing.T) {
 	proxyHandler, _ := newProxyWithServer(t, cfg)
 
 	value := 123
-	_, err := proxyHandler.rewriteIndexValue(value, true)
+	_, err := proxyHandler.rewriteIndexValue(value, true, false)
 	if err == nil {
 		t.Fatalf("expected error for invalid type")
 	}
@@ -2820,7 +2917,7 @@ func TestRewriteIndexValueArrayIndexPerTenant(t *testing.T) {
 	proxyHandler, _ := newProxyWithServer(t, cfg)
 
 	value := []interface{}{"orders-tenant1"}
-	result, err := proxyHandler.rewriteIndexValue(value, false)
+	result, err := proxyHandler.rewriteIndexValue(value, false, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -3085,6 +3182,21 @@ func TestHandleAnalyzeMissingIndex(t *testing.T) {
 	}
 }
 
+func TestAuthRequiredRejectsMissingHeader(t *testing.T) {
+	cfg := config.Default()
+	cfg.Auth.Required = true
+	cfg.Auth.Header = "Authorization"
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/orders-tenant1/_search", nil)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+}
+
 func TestHandleAnalyzeInvalidIndexInQuery(t *testing.T) {
 	cfg := config.Default()
 	proxyHandler, _ := newProxyWithServer(t, cfg)
@@ -3145,6 +3257,32 @@ func TestHandleExplainRootMissingIndex(t *testing.T) {
 
 	body := []byte(`{"query":{"match_all":{}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/_explain", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+}
+
+func TestRejectScrollEndpoint(t *testing.T) {
+	cfg := config.Default()
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodPost, "/_search/scroll", nil)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+}
+
+func TestRejectPitEndpoint(t *testing.T) {
+	cfg := config.Default()
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodPost, "/_pit", nil)
 	rec := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(rec, req)
 
@@ -3255,6 +3393,21 @@ func TestRejectDirectSharedIndexAccess(t *testing.T) {
 	proxyHandler, _ := newProxyWithServer(t, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/shared-index/_search", nil)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", rec.Code)
+	}
+}
+
+func TestRejectEncodedSharedIndexAccess(t *testing.T) {
+	cfg := config.Default()
+	cfg.SharedIndex.DenyPatterns = []string{"^shared-index$"}
+	cfg.SharedIndex.DenyCompiled = []*regexp.Regexp{regexp.MustCompile("^shared-index$")}
+	proxyHandler, _ := newProxyWithServer(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/shared%2Dindex/_search", nil)
 	rec := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(rec, req)
 
