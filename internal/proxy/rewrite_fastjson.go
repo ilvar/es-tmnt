@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/valyala/fastjson"
 )
@@ -217,15 +216,4 @@ func (p *Proxy) rewriteSortValueFastJSON(v *fastjson.Value, baseIndex string, ar
 	}
 
 	return result
-}
-
-// prefixFieldFastJSON is a helper that wraps the existing prefixField method
-func (p *Proxy) prefixFieldFastJSON(baseIndex, field string) string {
-	if field == "" {
-		return field
-	}
-	if strings.HasPrefix(field, baseIndex+".") {
-		return field
-	}
-	return baseIndex + "." + field
 }
