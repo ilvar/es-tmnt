@@ -162,16 +162,26 @@ func TestIndexPerTenantRejectsUnsupportedQueryType(t *testing.T) {
 	cfg := config.Default()
 	cfg.Mode = "index-per-tenant"
 	cfg.IndexPerTenant.IndexTemplate = "shared-index"
-	proxyHandler, _ := newProxyWithServer(t, cfg)
+	proxyHandler, capture := newProxyWithServer(t, cfg)
 
 	reqBody := []byte(`{"query":{"multi_match":{"query":"test","fields":["field1"]}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/orders-tenant2/_search", bytes.NewReader(reqBody))
 	rec := httptest.NewRecorder()
 	proxyHandler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected status 400, got %d", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
 	}
+	path, _, capturedBody, _, _ := capture.snapshot()
+	if path != "/shared-index/_search" {
+		t.Fatalf("expected path /shared-index/_search, got %q", path)
+	}
+
+	var expectedBody = []byte(`{"query":{"multi_match":{"query":"test","fields":["orders.field1"]}}}`)
+	if string(bytes.TrimSpace(capturedBody)) != string(bytes.TrimSpace(expectedBody)) {
+		t.Fatalf("expected body unchanged, got %s", string(capturedBody))
+	}
+	
 }
 
 func TestIndexPerTenantBulkRewrite(t *testing.T) {
