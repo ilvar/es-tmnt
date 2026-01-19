@@ -130,6 +130,13 @@ func TestValidateErrors(t *testing.T) {
 			wantErr: "tenant_regex.pattern must include named capture groups",
 		},
 		{
+			name: "tenant regex nested quantifiers",
+			mutate: func(cfg *Config) {
+				cfg.TenantRegex.Pattern = `^(?P<prefix>(a+)+)-(?P<tenant>[^-]+)(?P<postfix>.*)$`
+			},
+			wantErr: "tenant_regex.pattern contains nested quantifiers",
+		},
+		{
 			name: "empty passthrough",
 			mutate: func(cfg *Config) {
 				cfg.PassthroughPaths = []string{""}
@@ -167,6 +174,14 @@ func TestValidateErrors(t *testing.T) {
 				cfg.IndexPerTenant.IndexTemplate = ""
 			},
 			wantErr: "index_per_tenant.index_template is required",
+		},
+		{
+			name: "missing auth header when required",
+			mutate: func(cfg *Config) {
+				cfg.Auth.Required = true
+				cfg.Auth.Header = ""
+			},
+			wantErr: "auth.header is required",
 		},
 		{
 			name: "empty shared index deny pattern",

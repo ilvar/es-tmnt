@@ -11,6 +11,7 @@ type Config struct {
 	SharedIndex      SharedIndex    `yaml:"shared_index"`
 	IndexPerTenant   IndexPerTenant `yaml:"index_per_tenant"`
 	PassthroughPaths []string       `yaml:"passthrough_paths"`
+	Auth             Auth           `yaml:"auth"`
 }
 
 type Ports struct {
@@ -35,6 +36,11 @@ type IndexPerTenant struct {
 	IndexTemplate string `yaml:"index_template"`
 }
 
+type Auth struct {
+	Required bool   `yaml:"required"`
+	Header   string `yaml:"header"`
+}
+
 func Default() Config {
 	return Config{
 		Ports: Ports{
@@ -54,6 +60,10 @@ func Default() Config {
 		},
 		IndexPerTenant: IndexPerTenant{
 			IndexTemplate: "shared-index",
+		},
+		Auth: Auth{
+			Required: false,
+			Header:   "Authorization",
 		},
 	}
 }

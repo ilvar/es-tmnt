@@ -43,6 +43,9 @@ func (p *Proxy) rewriteUpdateBody(body []byte, baseIndex, tenantID string) ([]by
 }
 
 func (p *Proxy) rewriteBulkBody(body []byte, pathIndex string) ([]byte, error) {
+	if _, err := p.validateBulkTenantConsistency(body, pathIndex); err != nil {
+		return nil, err
+	}
 	lines := bytes.Split(body, []byte("\n"))
 	var output bytes.Buffer
 	for i := 0; i < len(lines); i++ {
@@ -121,6 +124,56 @@ func (p *Proxy) rewriteBulkBody(body []byte, pathIndex string) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
+func (p *Proxy) validateBulkTenantConsistency(body []byte, pathIndex string) (string, error) {
+	lines := bytes.Split(body, []byte("\n"))
+	var tenantID string
+	for i := 0; i < len(lines); i++ {
+		line := bytes.TrimSpace(lines[i])
+		if len(line) == 0 {
+			continue
+		}
+		var action map[string]map[string]interface{}
+		if err := json.Unmarshal(line, &action); err != nil {
+			return "", fmt.Errorf("invalid bulk action line: %w", err)
+		}
+		if len(action) != 1 {
+			return "", errors.New("bulk action must contain a single operation")
+		}
+		for op, meta := range action {
+			indexName, err := p.bulkIndexName(meta, pathIndex)
+			if err != nil {
+				return "", err
+			}
+			_, actionTenant, err := p.parseIndex(indexName)
+			if err != nil {
+				return "", err
+			}
+			if tenantID == "" {
+				tenantID = actionTenant
+			} else if tenantID != actionTenant {
+				return "", fmt.Errorf("bulk request contains multiple tenants: %s and %s", tenantID, actionTenant)
+			}
+			if op == "index" || op == "create" || op == "update" {
+				if i+1 >= len(lines) {
+					return "", errors.New("bulk payload missing source")
+				}
+				i++
+				sourceLine := bytes.TrimSpace(lines[i])
+				if len(sourceLine) == 0 {
+					if len(lines) <= 2 {
+						return "", errors.New("bulk payload missing source")
+					}
+					return "", errors.New("bulk source line empty")
+				}
+			}
+		}
+	}
+	if tenantID == "" {
+		return "", errors.New("bulk request missing index")
+	}
+	return tenantID, nil
+}
+
 func (p *Proxy) rewriteMultiSearchBody(body []byte, pathIndex string) ([]byte, error) {
 	lines := bytes.Split(body, []byte("\n"))
 	var output bytes.Buffer
@@ -133,8 +186,10 @@ func (p *Proxy) rewriteMultiSearchBody(body []byte, pathIndex string) ([]byte, e
 
 		if expectHeader {
 			if len(line) == 0 {
-				// Skip empty lines when looking for the next header.
-				continue
+				if i == len(lines)-1 {
+					continue
+				}
+				return nil, errors.New("msearch header line empty")
 			}
 
 			var header map[string]interface{}
@@ -200,6 +255,7 @@ func (p *Proxy) rewriteMultiSearchBody(body []byte, pathIndex string) ([]byte, e
 
 		// After a body, the next non-empty line should be a header.
 		expectHeader = true
+		baseIndex = ""
 	}
 
 	if !expectHeader {
@@ -230,6 +286,9 @@ func (p *Proxy) rewriteQueryBody(body []byte, baseIndex string) ([]byte, error) 
 	var payload interface{}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("invalid JSON body: %w", err)
+	}
+	if err := p.validateQueryPayload(payload); err != nil {
+		return nil, err
 	}
 	rewritten := p.rewriteQueryValue(payload, baseIndex)
 	return json.Marshal(rewritten)
@@ -327,27 +386,52 @@ func (p *Proxy) rewriteRollupBody(body []byte) ([]byte, error) {
 }
 
 func (p *Proxy) rewriteSourceIndexValue(value interface{}) (interface{}, error) {
-	return p.rewriteIndexValue(value, true)
+	return p.rewriteIndexValue(value, true, true)
 }
 
 func (p *Proxy) rewriteTargetIndexValue(value interface{}) (interface{}, error) {
-	return p.rewriteIndexValue(value, false)
+	return p.rewriteIndexValue(value, false, false)
 }
 
-func (p *Proxy) rewriteIndexValue(value interface{}, aliasForShared bool) (interface{}, error) {
+func (p *Proxy) rewriteIndexValue(value interface{}, aliasForShared bool, enforceSingleTenant bool) (interface{}, error) {
 	switch typed := value.(type) {
 	case string:
-		return p.rewriteIndexName(typed, aliasForShared)
+		if enforceSingleTenant {
+			if err := validateSourceIndexPattern(typed); err != nil {
+				return nil, err
+			}
+		}
+		rewritten, tenantID, err := p.rewriteIndexNameWithTenant(typed, aliasForShared)
+		if err != nil {
+			return nil, err
+		}
+		if enforceSingleTenant && tenantID == "" {
+			return nil, errors.New("source index must include tenant")
+		}
+		return rewritten, nil
 	case []interface{}:
 		output := make([]interface{}, 0, len(typed))
+		var tenantID string
 		for _, item := range typed {
 			itemString, ok := item.(string)
 			if !ok {
 				return nil, errors.New("index list values must be strings")
 			}
-			rewritten, err := p.rewriteIndexName(itemString, aliasForShared)
+			if enforceSingleTenant {
+				if err := validateSourceIndexPattern(itemString); err != nil {
+					return nil, err
+				}
+			}
+			rewritten, itemTenant, err := p.rewriteIndexNameWithTenant(itemString, aliasForShared)
 			if err != nil {
 				return nil, err
+			}
+			if enforceSingleTenant {
+				if tenantID == "" {
+					tenantID = itemTenant
+				} else if tenantID != itemTenant {
+					return nil, fmt.Errorf("source indices contain multiple tenants: %s and %s", tenantID, itemTenant)
+				}
 			}
 			output = append(output, rewritten)
 		}
@@ -358,9 +442,14 @@ func (p *Proxy) rewriteIndexValue(value interface{}, aliasForShared bool) (inter
 }
 
 func (p *Proxy) rewriteIndexName(index string, aliasForShared bool) (string, error) {
+	rewritten, _, err := p.rewriteIndexNameWithTenant(index, aliasForShared)
+	return rewritten, err
+}
+
+func (p *Proxy) rewriteIndexNameWithTenant(index string, aliasForShared bool) (string, string, error) {
 	baseIndex, tenantID, err := p.parseIndex(index)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if isSharedMode(p.cfg.Mode) {
 		if aliasForShared {
@@ -368,19 +457,26 @@ func (p *Proxy) rewriteIndexName(index string, aliasForShared bool) (string, err
 			if err == nil && alias != index {
 				p.logVerbose("index rewrite (alias): %s -> %s", index, alias)
 			}
-			return alias, err
+			return alias, tenantID, err
 		}
 		target, err := p.renderIndex(p.sharedIndex, baseIndex, tenantID)
 		if err == nil && target != index {
 			p.logVerbose("index rewrite (shared): %s -> %s", index, target)
 		}
-		return target, err
+		return target, tenantID, err
 	}
 	target, err := p.renderIndex(p.perTenantIdx, baseIndex, tenantID)
 	if err == nil && target != index {
 		p.logVerbose("index rewrite (per-tenant): %s -> %s", index, target)
 	}
-	return target, err
+	return target, tenantID, err
+}
+
+func validateSourceIndexPattern(indexName string) error {
+	if strings.ContainsAny(indexName, "*?") || strings.ContainsAny(indexName, "[]") || strings.Contains(indexName, ",") {
+		return errors.New("source index patterns must not contain wildcards or lists")
+	}
+	return nil
 }
 
 func (p *Proxy) rewriteQueryValue(value interface{}, baseIndex string) interface{} {
@@ -410,6 +506,61 @@ func (p *Proxy) rewriteQueryValue(value interface{}, baseIndex string) interface
 		return items
 	default:
 		return typed
+	}
+}
+
+func (p *Proxy) validateQueryPayload(payload interface{}) error {
+	switch typed := payload.(type) {
+	case map[string]interface{}:
+		for key, val := range typed {
+			if key == "query" || key == "post_filter" || key == "filter" {
+				if err := p.validateQueryValue(val); err != nil {
+					return err
+				}
+			}
+			if err := p.validateQueryPayload(val); err != nil {
+				return err
+			}
+		}
+	case []interface{}:
+		for _, item := range typed {
+			if err := p.validateQueryPayload(item); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (p *Proxy) validateQueryValue(value interface{}) error {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		for key, val := range typed {
+			if isUnsupportedQueryKey(key) {
+				return fmt.Errorf("unsupported query type: %s", key)
+			}
+			if err := p.validateQueryValue(val); err != nil {
+				return err
+			}
+		}
+	case []interface{}:
+		for _, item := range typed {
+			if err := p.validateQueryValue(item); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func isUnsupportedQueryKey(key string) bool {
+	switch key {
+	case "match_phrase", "match_phrase_prefix", "multi_match", "query_string", "simple_query_string",
+		"exists", "fuzzy", "percolate", "more_like_this", "script", "function_score", "nested",
+		"has_child", "has_parent", "collapse":
+		return true
+	default:
+		return strings.HasPrefix(key, "geo_") || strings.HasPrefix(key, "span_")
 	}
 }
 
