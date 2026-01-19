@@ -82,6 +82,16 @@ func New(cfg config.Config) (*Proxy, error) {
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if _, err := p.normalizeRequestPath(r); err != nil {
+		p.setResponseMode(w, responseModeHandled)
+		p.reject(w, err.Error())
+		return
+	}
+	if p.cfg.Auth.Required && strings.TrimSpace(r.Header.Get(p.cfg.Auth.Header)) == "" {
+		p.setResponseMode(w, responseModeHandled)
+		p.reject(w, "authentication required")
+		return
+	}
 	indexName, err := p.requestIndexCandidate(r)
 	if err != nil {
 		// Non-fatal: if we cannot determine an index candidate, proceed without shared index check.
@@ -91,6 +101,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.reject(w, "direct access to shared indices is not allowed")
 		return
 	}
+	segments := splitPath(r.URL.Path)
+	if p.isScrollOrPitPath(segments) {
+		p.logRequest(r, requestCategoryTenanted, "")
+		p.setResponseMode(w, responseModeHandled)
+		p.reject(w, "scroll and PIT endpoints are not supported")
+		return
+	}
 	if p.isPassthrough(r.URL.Path) {
 		p.logRequest(r, requestCategoryPass, "")
 		p.setResponseMode(w, responseModePassthrough)
@@ -98,7 +115,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.logRequestWithCategory(r)
-	segments := splitPath(r.URL.Path)
 	if len(segments) == 0 {
 		p.setResponseMode(w, responseModeHandled)
 		p.reject(w, "unsupported path")
@@ -1178,6 +1194,55 @@ func splitPath(pathValue string) []string {
 		return nil
 	}
 	return strings.Split(trimmed, "/")
+}
+
+func (p *Proxy) normalizeRequestPath(r *http.Request) (string, error) {
+	rawPath := r.URL.EscapedPath()
+	if rawPath == "" {
+		rawPath = r.URL.Path
+	}
+	decoded, err := url.PathUnescape(rawPath)
+	if err != nil {
+		return "", errors.New("invalid path encoding")
+	}
+	if strings.Contains(decoded, "%") {
+		return "", errors.New("double-encoded path segments are not allowed")
+	}
+	if hasDotSegments(decoded) {
+		return "", errors.New("path traversal segments are not allowed")
+	}
+	cleaned := path.Clean(decoded)
+	if cleaned == "." {
+		cleaned = "/"
+	}
+	r.URL.Path = cleaned
+	r.URL.RawPath = cleaned
+	r.RequestURI = r.URL.RequestURI()
+	return cleaned, nil
+}
+
+func hasDotSegments(pathValue string) bool {
+	for _, segment := range strings.Split(pathValue, "/") {
+		if segment == "." || segment == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Proxy) isScrollOrPitPath(segments []string) bool {
+	if len(segments) == 0 {
+		return false
+	}
+	for i, segment := range segments {
+		if segment == "_pit" {
+			return true
+		}
+		if segment == "_search" && i+1 < len(segments) && segments[i+1] == "scroll" {
+			return true
+		}
+	}
+	return false
 }
 
 func groupIndexes(regex *regexp.Regexp) (int, int, int, int, error) {

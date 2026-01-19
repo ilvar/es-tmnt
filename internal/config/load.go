@@ -24,6 +24,8 @@ const (
 	envSharedIndexTenantField      = "ES_TMNT_SHARED_INDEX_TENANT_FIELD"
 	envSharedIndexDenyPatterns     = "ES_TMNT_SHARED_INDEX_DENY_PATTERNS"
 	envIndexPerTenantIndexTemplate = "ES_TMNT_INDEX_PER_TENANT_TEMPLATE"
+	envAuthRequired                = "ES_TMNT_AUTH_REQUIRED"
+	envAuthHeader                  = "ES_TMNT_AUTH_HEADER"
 )
 
 func Load() (Config, error) {
@@ -51,6 +53,8 @@ func Load() (Config, error) {
 	overrideStringSlice(envSharedIndexDenyPatterns, &cfg.SharedIndex.DenyPatterns)
 	overrideString(envIndexPerTenantIndexTemplate, &cfg.IndexPerTenant.IndexTemplate)
 	overridePassthrough(envPassthroughPaths, &cfg.PassthroughPaths)
+	overrideBool(envAuthRequired, &cfg.Auth.Required)
+	overrideString(envAuthHeader, &cfg.Auth.Header)
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
